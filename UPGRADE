@@ -1,5 +1,22 @@
-# $Author: mil $ $Rev: 121 $
-# $Date: 2003-03-01 20:56:15 +0100 (Sat, 01 Mar 2003) $
+# $Author: mil $ $Rev: 193 $
+# $Date: 2003-09-07 19:08:29 +0200 (Sun, 07 Sep 2003) $
+
+For users upgrading from 0.6 to 0.7
+
+Apache::Gallery now uses the module Image::Imlib2 instead
+of Inline::C. This enables us to ship binary distributions.
+
+Copy htdocs/agfolder.png to your Apache
+icons directory.
+
+If you enable the GalleryMaxThumbnailsPerPage option you
+need to update your index.tpl template file or use the
+new templates. You also need to copy templates/default/gallery.css
+to your DocumentRoot.
+
+To update to the new layout, copy templates/new/gallery.css 
+to your DocumentRoot and copy templates/new/*.tpl to your
+GalleryTemplateDir. 
 
 For users upgrading from 0.5.1 to 0.6
 

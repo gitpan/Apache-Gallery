@@ -8,11 +8,11 @@ WriteMakefile(
     'PREREQ_PM'		=> { 
  				Image::Info  => 0,
 				Image::Size => 0,
+				Image::Imlib2 => 0.12,
 				CGI::FastTemplate => 0, 
-				Inline => 0, 
 				mod_perl => 0,
-				URI::Escape => 0,
-				Apache::Request => 0,
+				URI => 1.23,
+				CGI => 2.93,
 				Test::More => 0,
 				File::Spec => 0
 										 }, # e.g., Module::Name => 1.1

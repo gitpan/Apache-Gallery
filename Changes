@@ -1,7 +1,34 @@
-$Author: mil $ $Rev: 124 $
-$Date: 2003-04-22 10:30:12 +0200 (Tue, 22 Apr 2003) $
+$Author: mil $ $Rev: 197 $
+$Date: 2003-09-08 22:37:36 +0200 (Mon, 08 Sep 2003) $
 
 Revision history for Perl extension Apache::Gallery.
+
+0.7 Mon Sep  8 22:30:35 CEST 2003
+
+	- Support mod_perl version 1 and 2 (1.99) (Michael Legart)	
+	- Send status code 500 on errors, 404 on file not found and
+	  make IE show our own errorpage. (Thomas L. Kjeldsen)
+	- Bugfix for directories named "0" (Andreas Plesner Jacobsen)
+	- Added "selection mode". Select images with checkboxes and
+	  get a list of filenames. (Peter Andreasen)
+	- Fix to let the module work with perl 5.005 (Aaron)
+	- Do not allow scaling pictures to sizes above their
+	  original size (Aaron)
+	- Added GalleryUseFileDate option to make A::G show
+	  the files timestamps instead of using the EXIF value (Dennis Haney)
+	- Remember display size when turning Slideshow off (Hans Joergensen)
+	- Nice new layout (Thomas Kjaer)
+	- New option GalleryEXIFMode to control the way EXIF
+	  info is displayed. See docs for details (Michael Legart)
+	- Support for the FNumber EXIF value (Thomas Corell)
+	- Added GalleryRootText option to allow changing the name of
+	  the root element in the menu (Christopher Knight)
+	- Use Image::Imlib2 instead of Inline::C (Andreas Plesner Jacobsen)
+	- New option GalleryMaxThumbnailsPerPage to limit the number
+	  of thumbnails displayed per page. Disabled by default
+	  and requires templates update. (Michael Legart)
+	- Bugfix for the GalleryThumbnailSize option. Both height and
+	  width max sizes are now obeyed. (David Gee)
 
 0.6 Tue Apr 22 10:24:40 CEST 2003
 

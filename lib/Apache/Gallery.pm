@@ -1,67 +1,119 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 123 $
-# $Date: 2003-04-21 13:26:49 +0200 (Mon, 21 Apr 2003) $
+# $Author: mil $ $Rev: 194 $
+# $Date: 2003-09-07 19:28:41 +0200 (Sun, 07 Sep 2003) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "0.6";
+$VERSION = "0.7";
 
-use Apache ();
-use Apache::Constants qw(:common);
-use Apache::Request();
+BEGIN {
+
+	use mod_perl;
+	use constant MP2 => ($mod_perl::VERSION >= 1.99);
+	
+	if (MP2) {
+		require Apache2;
+		require Apache::Server;
+		require Apache::RequestRec;
+		require Apache::Log;
+		require APR::Table;
+		require Apache::RequestIO;
+		require Apache::SubRequest;
+		require Apache::Const;
+	
+		Apache::Const->import(-compile => 'OK','DECLINED','FORBIDDEN');
+	
+	}
+	else {
+		require Apache;
+		require Apache::Constants;
+		require Apache::Request;
+	
+		Apache::Constants->import('OK','DECLINED','FORBIDDEN');
+
+	}
+
+}
 
 use Image::Info qw(image_info);
 use Image::Size qw(imgsize);
+use Image::Imlib2;
 use CGI::FastTemplate;
 use File::stat;
 use File::Spec;
 use POSIX qw(floor);
 use URI::Escape;
+use POSIX;
+use CGI;
+
+use Data::Dumper;
 
 # Regexp for escaping URI's
 my $escape_rule = "^A-Za-z0-9\-_.!~*'()\/";
-
-use Inline (C => Config => 
-				LIBS => '-L/usr/X11R6/lib -lImlib2 -lm -ldl -lXext -lXext',
-				INC => '-I/usr/X11R6/include',
-				UNTAINT => 1,
-				DIRECTORY => File::Spec->tmpdir()
-			);
-
-use Inline 'C';
-Inline->init;
+my $memoized;
 
 sub handler {
 
 	my $r = shift or Apache->request();
 
-	$r->header_out("X-Powered-By","apachegallery.dk $VERSION - Hest design!");
-	$r->header_out("X-Gallery-Version", '$Rev: 123 $ $Date: 2003-04-21 13:26:49 +0200 (Mon, 21 Apr 2003) $');
+	if ((not $memoized) and ($r->dir_config('GalleryMemoize'))) {
+		require Memoize;
+		Memoize::memoize('get_imageinfo');
+		$memoized=1;
+	}
+
+	$r->headers_out->{"X-Powered-By"} = "apachegallery.dk $VERSION - Hest design!";
+	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 194 $ $Date: 2003-09-07 19:28:41 +0200 (Sun, 07 Sep 2003) $';
 
 	# Just return the http headers if the client requested that
 	if ($r->header_only) {
-		$r->send_http_header;
-		return OK;
+		return MP2 ? Apache::OK : Apache::Constants::OK;
 	}
 
-	my $apr = Apache::Request->instance($r, DISABLE_UPLOADS => 1, POST_MAX => 1024);
+	my $cgi = new CGI;
 
+	# Handle selected images
+	if ($cgi->param('selection')) {
+		my @selected = $cgi->param('selection');
+		my $content = "@selected";
+		$r->content_type('text/html');
+		$r->headers_out->{'Content-Length'} = length(${$content});
+
+		if (!MP2) {
+			$r->send_http_header;
+		}
+
+		$r->print($content);
+		return MP2 ? Apache::OK : Apache::Constants::OK;
+	}
+	
+	# Selectmode providing checkboxes beside all thumbnails
+	my $select_mode = $cgi->param('select');
+	
 	# Let Apache serve icons and files from the cache without us
 	# modifying the request
 	if ($r->uri =~ m/^\/icons/i) {
-		return DECLINED;
+		return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
 	}
 	if ($r->uri =~ m/\.cache\//i) {
 		my $file = cache_dir($r, 0);
-		$file =~ s/\/\.cache//;
+		$file =~ s/\.cache//;
 		my $subr = $r->lookup_file($file);
 		$r->content_type($subr->content_type());
-		$r->path_info('');
-		$r->filename($file);
-		return DECLINED;
+
+		if (MP2) {
+			$r->sendfile($file);
+		}
+		else {
+			$r->path_info('');
+			$r->filename($file);
+		}
+		
+		return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
+
 	}
 
 	my $uri = $r->uri;
@@ -73,20 +125,20 @@ sub handler {
 
 	unless (-f $filename or -d $filename) {
 	
-		show_error($r, "404!", "No such file or directory: ".uri_escape($r->uri, $escape_rule));
-		return OK;
+		show_error($r, 404, "404!", "No such file or directory: ".uri_escape($r->uri, $escape_rule));
+		return MP2 ? Apache::OK : Apache::Constants::OK;
 	}
 
 	# Let Apache serve files we don't know how to handle anyway
 	if (-f $filename && $filename !~ m/\.(?:jpe?g|png|tiff?|ppm)$/i) {
-		return DECLINED;
+		return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
 	}
 
 	if (-d $filename) {
 
 		unless (-d cache_dir($r, 0)) {
 			unless (create_cache($r, cache_dir($r, 0))) {
-				return OK;
+				return MP2 ? Apache::OK : Apache::Constants::OK;
 			}
 		}
 
@@ -106,19 +158,21 @@ sub handler {
 		$tpl->assign(META => " ");
 
 		unless (opendir (DIR, $filename)) {
-			show_error ($r, $!, "Unable to access directory $filename: $!");
-			return OK;
+			show_error ($r, 500, $!, "Unable to access directory $filename: $!");
+			return MP2 ? Apache::OK : Apache::Constants::OK;
 		}
 		
 		$tpl->assign(MENU => generate_menu($r));
+
+		$tpl->assign(FORM_BEGIN => $select_mode?'<form method="post">':'');
+		$tpl->assign(FORM_END   => $select_mode?'</form>':'');
 	
 		# Read, sort, and filter files
 		my @files = grep { !/^\./ && -f "$filename/$_" } readdir (DIR);
-		@files = sort @files;
 
 		my $sortby = $r->dir_config('GallerySortBy');
 		if ($sortby && $sortby =~ m/^(size|atime|mtime|ctime)$/) {
-			@files = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$sortby." $_", @files));
+			@files = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$sortby()." $_", @files));
 		} else {
 			@files = sort @files;
 		}
@@ -160,7 +214,56 @@ sub handler {
 
 			my $filelist;
 
+			my $file_counter = 0;
+			my $start_at = 1;
+			my $max_files = $r->dir_config('GalleryMaxThumbnailsPerPage');
+
+			if (defined($cgi->param('start'))) {
+				$start_at = $cgi->param('start');
+				if ($start_at < 1) {
+					$start_at = 1;
+				}
+			}
+
+			my $browse_links = "";
+			if (defined($max_files)) {
+			
+				for (my $i=1; $i<=scalar(@listing); $i++) {
+
+					my $from = $i;
+
+					my $to = $i+$max_files-1;
+					if ($to > scalar(@listing)) {
+						$to = scalar(@listing);
+					}
+
+					if ($start_at < $from || $start_at > $to) {
+						$browse_links .= "<a href=\"?start=$from\">$from - ".$to."</a> ";
+					}
+					else {
+						$browse_links .= "$from - $to ";
+					}
+
+					$i+=$max_files-1;
+
+				}
+
+			}
+
+			$tpl->assign(BROWSELINKS => $browse_links);
+
+			DIRLOOP:
 			foreach my $file (@listing) {
+
+				$file_counter++;
+
+				if ($file_counter < $start_at) {
+					next;
+				}
+
+				if (defined($max_files) && $file_counter > $max_files+$start_at-1) {
+					last DIRLOOP;
+				}
 
 				my $thumbfilename = $topdir."/".$file;
 
@@ -217,6 +320,7 @@ sub handler {
 					$tpl->assign(SRC     => uri_escape($uri."/.cache/$cached", $escape_rule));
 					$tpl->assign(HEIGHT => ($rotate ? $thumbnailwidth : $thumbnailheight));
 					$tpl->assign(WIDTH => ($rotate ? $thumbnailheight : $thumbnailwidth));
+					$tpl->assign(SELECT  => $select_mode?'<input type="checkbox" name="selection" value="'.$file.'">&nbsp;&nbsp;':'');
 
 					$tpl->parse(FILES => '.picture');
 
@@ -228,7 +332,7 @@ sub handler {
 			$tpl->assign(FILES => "No files found");
 		}
 
-		if (-e $topdir . '.comment' && -f $topdir . '.comment') {
+		if (-f $topdir . '.comment') {
 			my $comment_ref = get_comment($topdir . '.comment');
 			$tpl->assign(COMMENT => $comment_ref->{COMMENT} . '<br>') if $comment_ref->{COMMENT};
 			$tpl->assign(TITLE => $comment_ref->{TITLE}) if $comment_ref->{TITLE};
@@ -241,11 +345,14 @@ sub handler {
 		my $content = $tpl->fetch("MAIN");
 
 		$r->content_type('text/html');
-		$r->header_out('Content-Length', length(${$content}));
-		$r->send_http_header;
+		$r->headers_out->{'Content-Length'} = length(${$content});
+
+		if (!MP2) {
+			$r->send_http_header;
+		}
 
 		$r->print(${$content});
-		return OK;
+		return MP2 ? Apache::OK : Apache::Constants::OK;
 
 	}
 	else {
@@ -254,9 +361,9 @@ sub handler {
 		if (defined($ENV{QUERY_STRING}) && $ENV{QUERY_STRING} eq 'orig') {
 			if ($r->dir_config('GalleryAllowOriginal') ? 1 : 0) {
 				$r->filename($filename);
-				return DECLINED;
+				return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
 			} else {
-				return FORBIDDEN;
+				return MP2 ? Apache::FORBIDDEN : Apache::Constants::FORBIDDEN;
 			}
 		}
 	
@@ -268,7 +375,7 @@ sub handler {
 
 		unless (-d $cache_path) {
 			unless (create_cache($r, $cache_path)) {
-				return OK;
+				return MP2 ? Apache::OK : Apache::Constants::OK;
 			}
 		}
 
@@ -284,12 +391,12 @@ sub handler {
 
 		# Check if the selected width is allowed
 		my @sizes = split (/ /, $r->dir_config('GallerySizes') ? $r->dir_config('GallerySizes') : '640 800 1024 1600');
-		if ($apr->param('width')) {
-			unless ((grep $apr->param('width') == $_, @sizes) or ($apr->param('width') == $original_size)) {
-				show_error($r, "Invalid width", "The specified width is invalid");
-				return OK;
+		if ($cgi->param('width')) {
+			unless ((grep $cgi->param('width') == $_, @sizes) or ($cgi->param('width') == $original_size)) {
+				show_error($r, 200, "Invalid width", "The specified width is invalid");
+				return MP2 ? Apache::OK : Apache::Constants::OK;
 			}
-			$width = $apr->param('width');
+			$width = $cgi->param('width');
 		}
 		else {
 			$width = $sizes[0];
@@ -333,16 +440,24 @@ sub handler {
 			nopictureinfo  => 'nopictureinfo.tpl'
 		);
 
+		my $resolution = (($image_width > $orig_width) && ($height > $orig_height)) ? 
+		    "$orig_width x $orig_height" : "$image_width x $height";
+
 		$tpl->assign(TITLE => "Viewing ".$r->uri()." at $image_width x $height");
 		$tpl->assign(META => " ");
-		$tpl->assign(RESOLUTION => "$image_width x $height");
+		$tpl->assign(RESOLUTION => $resolution);
 		$tpl->assign(MENU => generate_menu($r));
 		$tpl->assign(SRC => uri_escape(".cache/$cached", $escape_rule));
 		$tpl->assign(URI => $r->uri());
+	
+		my $exif_mode = $r->dir_config('GalleryEXIFMode');
+		unless ($exif_mode) {
+			$exif_mode = 'namevalue';
+		}
 
 		unless (opendir(DATADIR, $path)) {
-			show_error($r, "Unable to access directory", "Unable to access directory $path");
-			return OK;
+			show_error($r, 500, "Unable to access directory", "Unable to access directory $path");
+			return MP2 ? Apache::OK : Apache::Constants::OK;
 		}
 		my @pictures = grep { /^[^.].*\.(jpe?g|png|ppm|tiff?)$/i } readdir (DATADIR);
 		closedir(DATADIR);
@@ -374,7 +489,7 @@ sub handler {
 					$tpl->assign(FILENAME  => $prevpicture);
 					$tpl->assign(WIDTH     => $width);
 					$tpl->assign(PICTURE   => uri_escape(".cache/$cached", $escape_rule));
-					$tpl->assign(DIRECTION => "Prev");
+					$tpl->assign(DIRECTION => "&laquo; prev");
 					$tpl->parse(BACK => "navpicture");
 				}
 				else {
@@ -395,7 +510,7 @@ sub handler {
 					$tpl->assign(FILENAME  => $nextpicture);
 					$tpl->assign(WIDTH     => $width);
 					$tpl->assign(PICTURE   => uri_escape(".cache/$cached", $escape_rule));
-					$tpl->assign(DIRECTION => "Next");
+					$tpl->assign(DIRECTION => "next &raquo;");
 					$tpl->parse(NEXT => "navpicture");
 				}
 				else {
@@ -405,7 +520,7 @@ sub handler {
 		}
 
 		my $foundcomment = 0;
-		if (-e $path . '/' . $picfilename . '.comment' && -f $path . '/' . $picfilename . '.comment') {
+		if (-f $path . '/' . $picfilename . '.comment') {
 		    my $comment_ref = get_comment($path . '/' . $picfilename . '.comment');
 				$foundcomment = 1;
 		    $tpl->assign(COMMENT => $comment_ref->{COMMENT} . '<br>') if $comment_ref->{COMMENT};
@@ -416,24 +531,53 @@ sub handler {
 
 		my @infos = split /, /, $r->dir_config('GalleryInfo') ? $r->dir_config('GalleryInfo') : 'Picture Taken => DateTimeOriginal, Flash => Flash';
 		my $foundinfo = 0;
+		my $exifvalues;	
 		foreach (@infos) {
-		
+	
 			my ($human_key, $exif_key) = (split " => ")[0,1];
 			my $value = $imageinfo->{$human_key};
 			if (defined($value)) {
-				$tpl->assign(KEY => $human_key);
-				$tpl->assign(VALUE => $value);
-				$tpl->parse(INFO => '.info');
+
 				$foundinfo = 1;
+
+				if ($exif_mode eq 'namevalue') {
+					$tpl->assign(KEY => $human_key);
+					$tpl->assign(VALUE => $value);
+					$tpl->parse(INFO => '.info');
+				}
+
+				if ($exif_mode eq 'variables') {
+					$tpl->assign("EXIF_".uc($exif_key) => $value);
+				}
+
+				if ($exif_mode eq 'values') {
+					$exifvalues .= "| ".$value;
+				}
+
 			} 
+
+		}
+
+		if ($exif_mode eq 'values') {
+			if ($exifvalues) {
+				$tpl->assign(EXIFVALUES => $exifvalues);
+			}
+			else {
+				$tpl->assign(EXIFVALUES => "");
+			}
 		}
 
 		if ($foundcomment and !$foundinfo) {
 			$tpl->assign(INFO => "");
 		}
 
-		if ($foundinfo or $foundcomment) {
+		if ($exif_mode ne 'namevalue') {
+			$tpl->assign(INFO => "");
+		}
+
+		if (($exif_mode eq 'namevalue' && $foundinfo) or $foundcomment) {
 			$tpl->parse(PICTUREINFO => 'pictureinfo');
+			$tpl->assign(EXIFVALUES => "");
 		}
 		else {
 			$tpl->parse(PICTUREINFO => 'nopictureinfo');
@@ -463,7 +607,7 @@ sub handler {
 			$tpl->assign(IMAGEURI => uri_escape($r->uri(), $escape_rule));
 			$tpl->assign(SECONDS => $interval);
 			$tpl->assign(WIDTH => ($width > $height ? $width : $height));
-			if ($apr->param('slideshow') && $apr->param('slideshow') == $interval and $nextpicture) {
+			if ($cgi->param('slideshow') && $cgi->param('slideshow') == $interval and $nextpicture) {
 				$tpl->parse(SLIDESHOW => '.intervalactive');
 			}
 			else {
@@ -471,16 +615,16 @@ sub handler {
 			}
 		}
 
-		if ($apr->param('slideshow') and $nextpicture) {
+		if ($cgi->param('slideshow') and $nextpicture) {
 
 			$tpl->parse(SLIDESHOW => '.slideshowoff');
 
-			unless ((grep $apr->param('slideshow') == $_, @slideshow_intervals)) {
-				show_error($r, "Invalid interval", "Invalid slideshow interval choosen");
-				return OK;
+			unless ((grep $cgi->param('slideshow') == $_, @slideshow_intervals)) {
+				show_error($r, 200, "Invalid interval", "Invalid slideshow interval choosen");
+				return MP2 ? Apache::OK : Apache::Constants::OK;
 			}
 
-			$tpl->assign(INTERVAL => $apr->param('slideshow'));
+			$tpl->assign(INTERVAL => $cgi->param('slideshow'));
 			$tpl->parse(META => '.refresh');
 
 		}
@@ -492,15 +636,17 @@ sub handler {
 		my $content = $tpl->fetch("MAIN");
 
 		$r->content_type('text/html');
-		$r->header_out('Content-Length', length(${$content}));
-		$r->send_http_header;
+		$r->headers_out->{'Content-Length'} = length(${$content});
+
+		if (!MP2) {
+			$r->send_http_header;
+		}
 
 		$r->print(${$content});
-		return OK;
+		return MP2 ? Apache::OK : Apache::Constants::OK;
 
 	}
 
-	return OK;
 }
 
 sub cache_dir {
@@ -539,7 +685,7 @@ sub create_cache {
 	my ($r, $path) = @_;
 
 		unless (mkdirhier ($path)) {
-			show_error($r, $!, "Unable to create cache directory in $path: $!");
+			show_error($r, 500, $!, "Unable to create cache directory in $path: $!");
 			return 0;
 		}
 
@@ -572,12 +718,20 @@ sub scale_picture {
 
 	my ($orig_width, $orig_height, $type) = imgsize($fullpath);
 
-	my @cachedir = split("/", cache_dir($r, 0));
-	pop(@cachedir) unless (-d join("/", @cachedir));
+	my $cache = cache_dir($r, 1);
 
-	my $cache = join("/", @cachedir);
+	if (($width > $orig_width) && ($height > $orig_height)) {
+	    require File::Copy;
+	    require File::Basename;
 
-	my ($thumbnailwidth, $thumbnailheight) = split(/x/, ($r->dir_config('GalleryThumbnailSize') ?  $r->dir_config('GalleryThumbnailSize') : "100x75"));
+	    my $fname     = File::Basename::basename($fullpath);
+	    my $cachefile = join("/",$cache,$fname);
+	    File::Copy::copy($fullpath,$cachefile);
+
+	    return $fname;
+	}
+
+	my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);
 
 	# Do we want to generate a new file in the cache?
 	my $scale = 1;
@@ -642,12 +796,18 @@ sub get_thumbnailsize {
 	my ($thumbnailwidth, $thumbnailheight) = split(/x/, ($r->dir_config('GalleryThumbnailSize') ?  $r->dir_config('GalleryThumbnailSize') : "100x75"));
 
 	my $width = $thumbnailwidth;
-	if ($orig_width < $orig_height) {
-		# rotated image
-		$width = $thumbnailheight;
-	}
+	my $height = $thumbnailheight;
+
 	my $scale = ($orig_width ? $width/$orig_width : 1);
-	my $height = $orig_height * $scale;
+
+	if ($orig_height) {
+		if ($orig_height * $scale > $thumbnailheight) {
+			$scale = $height/$orig_height;
+			$width = $orig_width * $scale;
+		}
+	}
+
+	$height = $orig_height * $scale;
 
 	$height = floor($height);
 	$width  = floor($width);
@@ -818,8 +978,27 @@ sub get_imageinfo {
 					}
 				}
 			}
+			if ($exif_key eq 'FNumber') {
+				if ($value =~ /^(\d+)\/(\d+)$/) {
+					$value = eval { $1 / $2 };
+					if ($@) {
+						$value = $@;
+					} else {
+						$value = int($value*10+0.5)/10;
+						$value = "f" . $value;
+					}
+				}
+			}
 			$imageinfo->{$human_key} = $value;
 		} 
+	}
+
+	if ($r->dir_config('GalleryUseFileDate') &&
+		($r->dir_config('GalleryUseFileDate') eq '1'
+		|| !$imageinfo->{"Picture Taken"} )) {
+
+		my $st = stat($file);
+		$imageinfo->{"DateTimeOriginal"} = $imageinfo->{"Picture Taken"} = scalar localtime($st->mtime) if $st;
 	}
 
 	return $imageinfo;
@@ -881,7 +1060,7 @@ sub get_comment {
 	my $content = '';
 	open(FH, $filename) or return $comment_ref;
 	my $title = <FH>;
-	if ($title =~ /^TITLE: (.*)$/) {
+	if ($title =~ m/^TITLE: (.*)$/) {
 		chomp($comment_ref->{TITLE} = $1);
 	} 
 	else {
@@ -898,7 +1077,7 @@ sub get_comment {
 
 sub show_error {
 
-	my ($r, $errortitle, $error) = @_;
+	my ($r, $statuscode, $errortitle, $error) = @_;
 
 	my $tpl = new CGI::FastTemplate($r->dir_config('GalleryTemplateDir'));
 
@@ -916,8 +1095,8 @@ sub show_error {
 
 	my $content = $tpl->fetch("MAIN");
 
+	$r->status($statuscode);
 	$r->content_type('text/html');
-	$r->send_http_header;
 
 	$r->print(${$content});
 
@@ -947,8 +1126,9 @@ sub generate_menu {
 		$picturename = pop(@links);	
 	}
 
+	my $root_text = (defined($r->dir_config('GalleryRootText')) ? $r->dir_config('GalleryRootText') : "root:" );
 	if ($r->uri eq '/') {
-		return qq{ <a href="/">root:</a> };
+		return qq{ <a href="/">$root_text</a> };
 	}
 
 	my $menu;
@@ -957,8 +1137,8 @@ sub generate_menu {
 
 		$menuurl .= $link."/";
 		my $linktext = $link;
-		unless ($link) {
-			$linktext = "root: ";
+		unless (length($link)) {
+			$linktext = "$root_text ";
 		}
 		else {
 			
@@ -976,81 +1156,44 @@ sub generate_menu {
 	if (-f $filename) {
 		$menu .= $picturename;
 	}
+	else {
+
+		if ($r->dir_config('GallerySelectionMode') && $r->dir_config('GallerySelectionMode') eq '1') {
+			$menu .= "<a href=\"".uri_escape($menuurl, $escape_rule);
+			$menu .= "?select=1\">[select]</a> ";
+		}
+	}
 
 	return $menu;
 }
 
+sub resizepicture {
+	my ($infile, $outfile, $x, $y, $rotate, $copyrightfile) = @_;
 
-1;
-__DATA__
-__C__
+	# Load image
+	my $image = Image::Imlib2->load($infile);
 
-#include <X11/Xlib.h>
-#include <Imlib2.h>
-#include <stdio.h>
-#include <string.h>
+	# Scale image
+	$image=$image->create_scaled_image($x, $y);
 
-int resizepicture(char* infile, char* outfile, int x, int y, int rotate, char* copyrightfile) {
-
-	Imlib_Image image;
-	Imlib_Image buffer;
-	Imlib_Image logo;
-	int logo_x, logo_y;
-	int old_x;
-	int old_y;
-
-	image = imlib_load_image(infile);
-
-	imlib_context_set_image(image);
-	imlib_context_set_blend(1);
-	imlib_context_set_anti_alias(1);
-	
-	old_x = imlib_image_get_width();
-	old_y = imlib_image_get_height();
-
-	buffer = imlib_create_image(x,y);
-	imlib_context_set_image(buffer);
-	
-	imlib_blend_image_onto_image(image, 0, 0, 0, old_x, old_y, 0, 0, x, y);
-
-	imlib_context_set_image(buffer);
-	
-	if (rotate != 0) {
-	    imlib_image_orientate(rotate);
-	}
-	if (strcmp(copyrightfile, "") != 0) {
-	    logo = imlib_load_image(copyrightfile);
-
-	    imlib_context_set_image(buffer);
-
-	    x = imlib_image_get_width();
-	    y = imlib_image_get_height();
-	    
-	    imlib_context_set_image(logo);
-	    
-	    logo_x = imlib_image_get_width();
-	    logo_y = imlib_image_get_height();
-
-	    imlib_context_set_image(buffer);
-	    imlib_blend_image_onto_image(logo, 0, 0, 0, logo_x, logo_y, x-logo_x, y-logo_y, logo_x, logo_y);
-
-	    imlib_context_set_image(logo);
-	    imlib_free_image();
-	    imlib_context_set_image(buffer);
+	# Rotate image
+	if ($rotate != 0) {
+		$image->image_orientate($rotate);
 	}
 
-	imlib_save_image(outfile);
+	# blend copyright image onto image
+	if ($copyrightfile and (my $logo=Image::Imlib2->load($copyrightfile))) {
+		my $x = $image->get_width();
+		my $y = $image->get_height();
+		my $logox = $logo->get_width();
+		my $logoy = $logo->get_height();
+		$image->blend($logo, 0, 0, 0, $logox, $logoy, $x-$logox, $y-$logoy, $logox, $logoy);
+	}
 
-	imlib_context_set_image(image);
-	imlib_free_image();
-
-	imlib_context_set_image(buffer);
-	imlib_free_image();
-
-	return 1;
+	$image->save($outfile);
 }
 
-__END__
+1;
 
 =head1 NAME
 
@@ -1077,7 +1220,7 @@ directories.
 The options are set in the httpd.conf/.htaccess file using the syntax:
 B<PerlSetVar OptionName 'value'>
 
-Example: B<PerlSetVar GallerCacheDir '/var/tmp/Apache-Gallery/'>
+Example: B<PerlSetVar GalleryCacheDir '/var/tmp/Apache-Gallery/'>
 
 =over 4
 
@@ -1085,7 +1228,7 @@ Example: B<PerlSetVar GallerCacheDir '/var/tmp/Apache-Gallery/'>
 
 Some cameras, like the Canon G3, can detect the orientation of a 
 the pictures you take and will save this information in the 
-'Orientation' EXIF field. Apache::Gallery will then automaticly
+'Orientation' EXIF field. Apache::Gallery will then automatically
 rotate your images. 
 
 This behavior is default but can be disabled by setting GalleryAutoRotate
@@ -1094,9 +1237,9 @@ to 0.
 =item B<GalleryCacheDir>
 
 Directory where Apache::Gallery should create its cache with scaled
-pictures. The default is /var/tmp/Apache-Gallery/ . Here a directory
+pictures. The default is /var/tmp/Apache-Gallery/ . Here, a directory
 for each virtualhost or location will be created automaticly. Make
-sure your webserver has writeaccess to the CacheDir.
+sure your webserver has write access to the CacheDir.
 
 =item B<GalleryTemplateDir>
 
@@ -1167,6 +1310,52 @@ a slideshow. The default is '3 5 10 15 30'
 Instead of the default filename ordering you can sort by any
 stat attribute. For example size, atime, mtime, ctime.
 
+=item B<GalleryMemoize>
+
+Cache EXIF data using Memoize - this will make Apache::Gallery faster
+when many people access the same images, but it will also cache EXIF
+data until the current Apache child dies.
+
+=item B<GalleryUseFileDate>
+
+Set this option to 1 to make A::G show the files timestamp
+instead of the EXIF value for "Picture taken".
+
+=item B<GallerySelectionMode>
+
+Enable the selection mode. Select images with checkboxes and
+get a list of filenames. 
+
+=item B<GalleryEXIFMode>
+
+You can choose how Apache::Gallery should display EXIF info
+from your images. 
+
+The default setting is 'namevalue'. This setting will make 
+Apache::Gallery print out the names and values of the EXIF values 
+you configure with GalleryInfo. The information will be parsed into 
+$INFO in pictureinfo.tpl.  
+
+You can also set it to 'values' which will make A::G parse
+the configured values into the var $EXIFVALUES as 'value | value | value'
+
+If you set this option to 'variables' the items you configure in GalleryInfo 
+will be available to your templates as $EXIF_<KEYNAME> (in all uppercase). 
+That means that with the default setting "Picture Taken => DateTimeOriginal, 
+Flash => Flash" you will have the variables $EXIF_DATETIMEORIGINAL and 
+$EXIF_FLASH avilable to your templates. You can place them
+anywhere you want.
+
+=item B<GalleryRootText>
+
+Change the name that appears as the root element in the menu. The
+default is "root:"
+
+=item B<GalleryMaxThumbnailsPerPage>
+
+This options controls how many thumbnails should be displayed in a 
+page. It requires $BROWSELINKS to be in the index.tpl template file.
+
 =back
 
 =head1 FEATURES
@@ -1227,8 +1416,6 @@ with the visible name of the folder.
 
 =item B<Apache with mod_perl>
 
-=item B<Apache::Request>
-
 =item B<URI::Escape>
 
 =item B<Image::Info>
@@ -1237,7 +1424,7 @@ with the visible name of the folder.
 
 =item B<CGI::FastTemplate>
 
-=item B<Inline::C>
+=item B<Image::Imlib2>
 
 =item B<X11 libraries>
 (ie, XFree86)
@@ -1247,20 +1434,13 @@ Remember the -dev package when using rpm, deb or other package formats!
 
 =back
 
-=head1 BUGS
-
-Fatal errors are showed on a page with a HTTP OK return code. This is because
-Internet Explorer will show it's own error page otherwise. Is it possible to
-force IE to show our custom errormessage even when returning HTTP status code
-500?
-
 =head1 AUTHOR
 
 Michael Legart <michael@legart.dk>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2001-2002 Michael Legart <michael@legart.dk>
+Copyright (C) 2001-2003 Michael Legart <michael@legart.dk>
 
 Templates designed by Thomas Kjaer <tk@lnx.dk>
 
@@ -1276,7 +1456,7 @@ Thanks to Thomas Eibner and other for patches. (See the Changes file)
 
 =head1 SEE ALSO
 
-L<perl>, L<mod_perl>, L<Apache::Request>, L<Inline::C>, L<CGI::FastTemplate>,
+L<perl>, L<mod_perl>, L<Image::Imlib2>, L<CGI::FastTemplate>,
 L<Image::Info>, and L<Image::Size>.
 
 =cut
