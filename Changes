@@ -1,7 +1,14 @@
-$Author: mil $ $Rev: 32 $
-$Date: 2002-08-11 17:40:25 +0200 (Sun, 11 Aug 2002) $
+$Author: mil $ $Rev: 54 $
+$Date: 2002-09-15 11:52:40 +0200 (Sun, 15 Sep 2002) $
 
 Revision history for Perl extension Apache::Gallery.
+
+0.5 Sun Sep 15 11:55:56 CEST 2002
+
+	- Added slideshow feature (Me)	
+	- Code cleanup (Me)
+	- Moved the cache to one single directory outside the webscope (Rene Joergensen)
+	- Allow user to customize the "No info found" message (Me)
 
 0.4.1 Sun Aug 11 17:48:09 CEST 2002
 

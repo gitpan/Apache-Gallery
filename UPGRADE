@@ -1,5 +1,26 @@
-# $Author: mil $ $Rev: 29 $
-# $Date: 2002-07-30 21:52:42 +0200 (Tue, 30 Jul 2002) $
+# $Author: mil $ $Rev: 54 $
+# $Date: 2002-09-15 11:52:40 +0200 (Sun, 15 Sep 2002) $
+
+For users upgrading from 0.4 to 0.5
+
+Remember to update the following templates:
+templates/interval.tpl
+templates/intervalactive.tpl
+templates/layout.tpl
+templates/refresh.tpl
+templates/scaleactive.tpl
+templates/showpicture.tpl
+templates/slideshowisoff.tpl
+templates/slideshowoff.tpl
+templates/pictureinfo.tpl
+templates/nopictureinfo.tpl
+
+A new option has been added:
+
+PerlSetVar	GalleryCacheDir '/var/tmp/Apache-Gallery/'
+
+GalleryCacheDir is optional but you can use it to decide
+where Apache::Gallery should place the scaled pictures.
 
 For users upgrading from 0.3 to 0.4:
 
