@@ -1,0 +1,17 @@
+Changes
+LICENSE
+MANIFEST
+Makefile.PL
+README
+test.pl
+htdocs/folder.png
+htdocs/gallery.css
+lib/Apache/Gallery.pm
+templates/directory.tpl
+templates/error.tpl
+templates/index.tpl
+templates/layout.tpl
+templates/navpicture.tpl
+templates/picture.tpl
+templates/showpicture.tpl
+src/gallery-editcomments.pl
