@@ -1,17 +1,20 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 240 $
-# $Date: 2004-02-29 16:23:09 +0100 (Sun, 29 Feb 2004) $
+# $Author: mil $ $Rev: 276 $
+# $Date: 2004-09-11 22:04:10 +0200 (Sat, 11 Sep 2004) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "0.8";
+$VERSION = "0.9";
 
 BEGIN {
 
-	use mod_perl;
+	eval('require mod_perl;');
+	if ( $@ ) {
+		use Apache2::mod_perl;
+	}
 	use constant MP2 => ($mod_perl::VERSION >= 1.99);
 	
 	if (MP2) {
@@ -24,7 +27,7 @@ BEGIN {
 		require Apache::SubRequest;
 		require Apache::Const;
 	
-		Apache::Const->import(-compile => 'OK','DECLINED','FORBIDDEN');
+		Apache::Const->import(-compile => 'OK','DECLINED','FORBIDDEN','NOT_FOUND');
 	
 	}
 	else {
@@ -32,7 +35,7 @@ BEGIN {
 		require Apache::Constants;
 		require Apache::Request;
 	
-		Apache::Constants->import('OK','DECLINED','FORBIDDEN');
+		Apache::Constants->import('OK','DECLINED','FORBIDDEN','NOT_FOUND');
 
 	}
 
@@ -66,7 +69,11 @@ sub handler {
 	}
 
 	$r->headers_out->{"X-Powered-By"} = "apachegallery.dk $VERSION - Hest design!";
-	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 240 $ $Date: 2004-02-29 16:23:09 +0100 (Sun, 29 Feb 2004) $';
+	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 276 $ $Date: 2004-09-11 22:04:10 +0200 (Sat, 11 Sep 2004) $';
+
+	my $filename = $r->filename;
+	$filename =~ s/\/$//;
+	my $topdir = $filename;
 
 	# Just return the http headers if the client requested that
 	if ($r->header_only) {
@@ -75,7 +82,12 @@ sub handler {
 			$r->send_http_header;
 		}
 
-		return MP2 ? Apache::OK : Apache::Constants::OK;
+  	if (-f $filename or -d $filename) {
+			return MP2 ? Apache::OK : Apache::Constants::OK;
+		}
+		else {
+			return MP2 ? Apache::NOT_FOUND : Apache::Constants::NOT_FOUND;
+		}
 	}
 
 	my $cgi = new CGI;
@@ -98,38 +110,51 @@ sub handler {
 	# Selectmode providing checkboxes beside all thumbnails
 	my $select_mode = $cgi->param('select');
 	
-	# Let Apache serve icons and files from the cache without us
-	# modifying the request
+	# Let Apache serve icons without us modifying the request
 	if ($r->uri =~ m/^\/icons/i) {
 		return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
 	}
+	# Lookup the file in the cache and scale the image if the cached
+	# image does not exist
 	if ($r->uri =~ m/\.cache\//i) {
+
+		my $filename = $r->filename().$r->path_info();
+		$filename =~ s/\.cache//;
+
+		$filename =~ m/\/(\d+)x(\d+)\-/;
+		my $image_width = $1;
+		my $image_height = $2;
+
+		$filename =~ s/\/(\d+)x(\d+)\-//;
+
+		my ($width, $height, $type) = imgsize($filename);
+
+		my $imageinfo = get_imageinfo($r, $filename, $type, $width, $height);
+	
+		my $cached = scale_picture($r, $filename, $image_width, $image_height, $imageinfo);
+
 		my $file = cache_dir($r, 0);
 		$file =~ s/\.cache//;
+
 		my $subr = $r->lookup_file($file);
 		$r->content_type($subr->content_type());
 
 		if (MP2) {
 			$r->sendfile($file);
+			return Apache::OK;
 		}
 		else {
 			$r->path_info('');
 			$r->filename($file);
+			return Apache::Constants::DECLINED;
 		}
 		
-		return MP2 ? Apache::DECLINED : Apache::Constants::DECLINED;
-
 	}
 
 	my $uri = $r->uri;
 	$uri =~ s/\/$//;
 
-	my $filename = $r->filename;
-	$filename =~ s/\/$//;
-	my $topdir = $filename;
-
 	unless (-f $filename or -d $filename) {
-	
 		show_error($r, 404, "404!", "No such file or directory: ".uri_escape($r->uri, $escape_rule));
 		return MP2 ? Apache::OK : Apache::Constants::OK;
 	}
@@ -165,7 +190,7 @@ sub handler {
 				file      => "$tpl_dir/file.tpl",
 				comment   => "$tpl_dir/dircomment.tpl",
 				nocomment => "$tpl_dir/nodircomment.tpl",
-			       );
+		);
 
 		$tpl_vars{TITLE} = "Index of: $uri";
 		$tpl_vars{META} = " ";
@@ -183,12 +208,7 @@ sub handler {
 		# Read, sort, and filter files
 		my @files = grep { !/^\./ && -f "$filename/$_" } readdir (DIR);
 
-		my $sortby = $r->dir_config('GallerySortBy');
-		if ($sortby && $sortby =~ m/^(size|atime|mtime|ctime)$/) {
-			@files = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$sortby()." $_", @files));
-		} else {
-			@files = sort @files;
-		}
+		@files=gallerysort($r, @files);
 
 		my @downloadable_files;
 
@@ -215,8 +235,20 @@ sub handler {
 		# Read and sort directories
 		rewinddir (DIR);
 		my @directories = grep { !/^\./ && -d "$filename/$_" } readdir (DIR);
-		@directories = sort @directories;
+		my $dirsortby;
+		if (defined($r->dir_config('GalleryDirSortBy'))) {
+			$dirsortby=$r->dir_config('GalleryDirSortBy');
+		} else {
+			$dirsortby=$r->dir_config('GallerySortBy');
+		}
+		if ($dirsortby && $dirsortby =~ m/^(size|atime|mtime|ctime)$/) {
+			@directories = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$dirsortby()." $_", @directories));
+		} else {
+			@directories = sort @directories;
+		}
+
 		closedir(DIR);
+
 
 		# Combine directories and files to one listing
 		my @listing;
@@ -289,9 +321,12 @@ sub handler {
 						$dirtitle = get_filecontent($thumbfilename . ".folder");
 					}
 
+					$dirtitle = $dirtitle ? $dirtitle : $file;
+					$dirtitle =~ s/_/ /g if $r->dir_config('GalleryUnderscoresToSpaces');
+
 					$tpl_vars{FILES} .= fill_in_file($tpl_vars{directory},
 						HASH=> {FILEURL => uri_escape($fileurl, $escape_rule),
-						FILE    => ($dirtitle ? $dirtitle : $file),
+						FILE    => $dirtitle,
 					});
 
 				}
@@ -333,7 +368,7 @@ sub handler {
 					next unless (grep $type eq $_, @filetypes);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $width, $height);	
 					my $imageinfo = get_imageinfo($r, $thumbfilename, $type, $width, $height);
-					my $cached = scale_picture($r, $thumbfilename, $thumbnailwidth, $thumbnailheight, $imageinfo);
+					my $cached = get_scaled_picture_name($thumbfilename, $thumbnailwidth, $thumbnailheight);
 
 					my $rotate = readfile_getnum($r, $imageinfo, $thumbfilename.".rotate");
 					my %file_vars = (FILEURL => uri_escape($fileurl, $escape_rule),
@@ -362,16 +397,18 @@ sub handler {
 			$tpl_vars{DIRCOMMENT} = fill_in_file($tpl_vars{comment},
 							     HASH => \%comment_vars,
 							    );
+			$tpl_vars{TITLE} = $comment_ref->{TITLE} if $comment_ref->{TITLE};
 		} else {
 			$tpl_vars{DIRCOMMENT} = fill_in_file($tpl_vars{nocomment});
 		}
 
 		$tpl_vars{MAIN} = fill_in_file($tpl_vars{index},
-					       HASH => \%tpl_vars,
-					      );
+					HASH => \%tpl_vars,
+		);
+		
 		$tpl_vars{MAIN} = fill_in_file($tpl_vars{layout},
-					       HASH => \%tpl_vars,
-					      );
+					HASH => \%tpl_vars,
+		);
 
 
 		$r->content_type('text/html');
@@ -459,7 +496,7 @@ sub handler {
 		$width       = floor($width);
 		$height      = floor($height);
 
-		my $cached = scale_picture($r, $filename, $image_width, $height, $imageinfo);
+		my $cached = get_scaled_picture_name($filename, $image_width, $height);
 		
 		my $tpl_dir = $r->dir_config('GalleryTemplateDir');
 
@@ -480,7 +517,7 @@ sub handler {
 			       );
 
 		my $resolution = (($image_width > $orig_width) && ($height > $orig_height)) ? 
-		    "$orig_width x $orig_height" : "$image_width x $height";
+			"$orig_width x $orig_height" : "$image_width x $height";
 
 		$tpl_vars{TITLE} = "Viewing ".$r->uri()." at $image_width x $height";
 		$tpl_vars{META} = " ";
@@ -500,7 +537,7 @@ sub handler {
 		}
 		my @pictures = grep { /$img_pattern/i } readdir (DATADIR);
 		closedir(DATADIR);
-		@pictures = sort @pictures;
+		@pictures = gallerysort($r, @pictures);
 
 		$tpl_vars{TOTAL} = scalar @pictures;
 
@@ -523,7 +560,7 @@ sub handler {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$prevpicture);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
 					my $imageinfo = get_imageinfo($r, $path.$prevpicture, $type, $orig_width, $orig_height);
-					my $cached = scale_picture($r, $path.$prevpicture, $thumbnailwidth, $thumbnailheight, $imageinfo);
+					my $cached = get_scaled_picture_name($path.$prevpicture, $thumbnailwidth, $thumbnailheight);
 					my %nav_vars;
 					$nav_vars{URL}       = uri_escape($prevpicture, $escape_rule);
 					$nav_vars{FILENAME}  = $prevpicture;
@@ -547,7 +584,7 @@ sub handler {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$nextpicture);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
 					my $imageinfo = get_imageinfo($r, $path.$nextpicture, $type, $thumbnailwidth, $thumbnailheight);
-					my $cached = scale_picture($r, $path.$nextpicture, $thumbnailwidth, $thumbnailheight, $imageinfo);
+					my $cached = get_scaled_picture_name($path.$nextpicture, $thumbnailwidth, $thumbnailheight);
 					my %nav_vars;
 					$nav_vars{URL}       = uri_escape($nextpicture, $escape_rule);
 					$nav_vars{FILENAME}  = $nextpicture;
@@ -556,8 +593,8 @@ sub handler {
 					$nav_vars{DIRECTION} = "next &raquo;";
 
 					$tpl_vars{NEXT} = fill_in_file($tpl_vars{navpicture},
-								       HASH => \%nav_vars
-								      );
+							HASH => \%nav_vars
+					);
 				}
 				else {
 					$tpl_vars{NEXT} = "&nbsp;";
@@ -637,8 +674,8 @@ sub handler {
 		}
 		else {
 			$tpl_vars{PICTUREINFO} = fill_in_file($tpl_vars{nopictureinfo},
-							      HASH => \%tpl_vars,
-							     );
+					HASH => \%tpl_vars,
+			);
 		}
 
 		my $scaleable = 0;
@@ -770,7 +807,11 @@ sub cache_dir {
 
 	}
 
-	my (undef, $dirs, $filename) = File::Spec->splitpath($r->uri);
+	# If the uri contains .cache we need to remove it
+	my $uri = $r->uri;
+	$uri =~ s/\.cache//;
+
+	my (undef, $dirs, $filename) = File::Spec->splitpath($uri);
 	# We don't need a volume as this is a relative path
 
 	if ($strip_filename) {
@@ -809,6 +850,28 @@ sub mkdirhier {
 	}
 }
 
+sub get_scaled_picture_name {
+
+	my ($fullpath, $width, $height) = @_;
+
+	my (undef, undef, $type) = imgsize($fullpath);
+
+	my @dirs = split(/\//, $fullpath);
+	my $filename = pop(@dirs);
+	my $newfilename;
+
+	if (grep $type eq $_, qw(PPM TIF GIF)) {
+		$newfilename = $width."x".$height."-".$filename;
+		# needs to be configurable
+		$newfilename =~ s/\.(\w+)$/-$1\.jpg/;
+	} else {
+		$newfilename = $width."x".$height."-".$filename;
+	}
+
+	return $newfilename;
+	
+}
+
 sub scale_picture {
 
 	my ($r, $fullpath, $width, $height, $imageinfo) = @_;
@@ -820,15 +883,12 @@ sub scale_picture {
 
 	my $cache = cache_dir($r, 1);
 
+	my $newfilename = get_scaled_picture_name($fullpath, $width, $height);
+
 	if (($width > $orig_width) && ($height > $orig_height)) {
-	    require File::Copy;
-	    require File::Basename;
-
-	    my $fname     = File::Basename::basename($fullpath);
-	    my $cachefile = join("/",$cache,$fname);
-	    File::Copy::copy($fullpath,$cachefile);
-
-	    return $fname;
+		require File::Copy;
+		File::Copy::copy($fullpath,$cache."/".$newfilename);
+		return $newfilename;
 	}
 
 	my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);
@@ -836,15 +896,6 @@ sub scale_picture {
 	# Do we want to generate a new file in the cache?
 	my $scale = 1;
 
-	my $newfilename;
-	if (grep $type eq $_, qw(PPM TIF GIF)) {
-		$newfilename = $width."x".$height."-".$filename;
-		# needs to be configurable
-		$newfilename =~ s/\.(\w+)$/-$1\.jpg/;
-	} else {
-		$newfilename = $width."x".$height."-".$filename;
-	}
-	
 	if (-f $cache."/".$newfilename) {	
 		$scale = 0;
 
@@ -881,17 +932,17 @@ sub scale_picture {
 
 		if ($width == $thumbnailwidth or $width == $thumbnailheight) {
 
-		    resizepicture($fullpath, $newpath, $width, $height, $rotate, '', '', '', '', '');
+			resizepicture($r, $fullpath, $newpath, $width, $height, $rotate, '', '', '', '', '');
 
 		} else {
 
-				resizepicture($fullpath, $newpath, $width, $height, $rotate, 
-					($r->dir_config('GalleryCopyrightImage') ? $r->dir_config('GalleryCopyrightImage') : ''), 
-					($r->dir_config('GalleryTTFDir') ? $r->dir_config('GalleryTTFDir') : ''), 
-					($r->dir_config('GalleryCopyrightText') ? $r->dir_config('GalleryCopyrightText') : ''), 
-					($r->dir_config('GalleryCopyrightColor') ? $r->dir_config('GalleryCopyrightColor') : ''), 
-					($r->dir_config('GalleryTTFFile') ? $r->dir_config('GalleryTTFFile') : ''), 
-					($r->dir_config('GalleryTTFSize') ?  $r->dir_config('GalleryTTFSize') : ''));
+			resizepicture($r, $fullpath, $newpath, $width, $height, $rotate, 
+				($r->dir_config('GalleryCopyrightImage') ? $r->dir_config('GalleryCopyrightImage') : ''), 
+				($r->dir_config('GalleryTTFDir') ? $r->dir_config('GalleryTTFDir') : ''), 
+				($r->dir_config('GalleryCopyrightText') ? $r->dir_config('GalleryCopyrightText') : ''), 
+				($r->dir_config('GalleryCopyrightColor') ? $r->dir_config('GalleryCopyrightColor') : ''), 
+				($r->dir_config('GalleryTTFFile') ? $r->dir_config('GalleryTTFFile') : ''), 
+				($r->dir_config('GalleryTTFSize') ?  $r->dir_config('GalleryTTFSize') : ''));
 
 		}
 	}
@@ -915,10 +966,11 @@ sub get_thumbnailsize {
 	my $width = $thumbnailwidth;
 	my $height = $thumbnailheight;
 
-        # If the image is rotated, flip everything around.
-        if (defined $r->dir_config('GalleryThumbnailSizeLS')
-	    and $r->dir_config('GalleryThumbnailSizeLS') eq '1'
-	    and $orig_width < $orig_height) {
+	# If the image is rotated, flip everything around.
+	if (defined $r->dir_config('GalleryThumbnailSizeLS')
+	and $r->dir_config('GalleryThumbnailSizeLS') eq '1'
+	and $orig_width < $orig_height) {
+		
 		$width = $thumbnailheight;
 		$height = $thumbnailwidth;
 	}
@@ -946,17 +998,23 @@ sub get_imageinfo {
 	if ($type eq 'Data stream is not a known image file format') {
 		# should never be reached, this is supposed to be handled outside of here
 		Apache->request->log_error("Something was fishy with the type of the file $file\n");
-	} elsif (grep $type eq $_, qw(PPM TIF PNG GIF)) {
-		# These files do not natively have EXIF info embedded in the file
+	} else { 
+		# Some files, like TIFF, PNG, GIF do not have EXIF info embedded but use .thm files
+		# instead.
 		my $tmpfilename = $file;
 		# We have a problem with Windows based file extensions here as they are often .THM
 		$tmpfilename =~ s/\.(\w+)$/.thm/;
 		if (-e $tmpfilename && -f $tmpfilename && -r $tmpfilename) {
 			$imageinfo = image_info($tmpfilename);
+			$imageinfo->{width} = $width;
+			$imageinfo->{height} = $height;
 		}
-	} elsif (grep $type eq $_, qw(JPG)) {
-		# Only for files that natively keep the EXIF info in the same file
-		$imageinfo = image_info($file);
+		# If there is no .thm file and our file is a JPEG file we try to extract the EXIf
+		# info using Image::Info
+		elsif (grep $type eq $_, qw(JPG)) {
+			# Only for files that natively keep the EXIF info in the same file
+			$imageinfo = image_info($file);
+		}
 	}
 
 	unless (defined($imageinfo->{width}) and defined($imageinfo->{height})) {
@@ -968,7 +1026,7 @@ sub get_imageinfo {
 	foreach (@infos) {
 		
 		my ($human_key, $exif_key) = (split " => ")[0,1];
-		if (defined($imageinfo->{$exif_key})) {
+		if (defined($exif_key) && defined($imageinfo->{$exif_key})) {
 			my $value = "";
 			if (ref($imageinfo->{$exif_key}) eq 'Image::TIFF::Rational') { 
 				$value = $imageinfo->{$exif_key}->as_string;
@@ -1170,8 +1228,8 @@ sub get_filecontent {
 	open(FH, $file) or return undef;
 	my $content = '';
 	{
-	local $/;
-	$content = <FH>;
+		local $/;
+		$content = <FH>;
 	}
 	close(FH);
 	return $content;
@@ -1209,7 +1267,7 @@ sub show_error {
 
 	my %tpl_vars = (layout => "$tpl/layout.tpl",
 			error  => "$tpl/error.tpl",
-		       );
+	);
 
 	$tpl_vars{TITLE}      = "Error! $errortitle";
 	$tpl_vars{META}       = "";
@@ -1297,7 +1355,7 @@ sub generate_menu {
 }
 
 sub resizepicture {
-	my ($infile, $outfile, $x, $y, $rotate, $copyrightfile, $GalleryTTFDir, $GalleryCopyrightText, $text_color, $GalleryTTFFile, $GalleryTTFSize) = @_;
+	my ($r, $infile, $outfile, $x, $y, $rotate, $copyrightfile, $GalleryTTFDir, $GalleryCopyrightText, $text_color, $GalleryTTFFile, $GalleryTTFSize) = @_;
 
 	# Load image
 	my $image = Image::Imlib2->load($infile) or warn("Unable to open file $infile, $!");
@@ -1360,9 +1418,28 @@ sub resizepicture {
 			}
 		}
 	}
- 
+
+	my $quality = $r->dir_config('GalleryQuality');
+	if ($quality && $quality =~ m/^\d+$/) {
+		$image->set_quality($quality);
+	}
+
 	$image->save($outfile);
 
+}
+
+sub gallerysort {
+	my $r=shift;
+	my @files=@_;
+	my $sortby = $r->dir_config('GallerySortBy');
+	my $filename=$r->lookup_uri($r->uri)->filename;
+	$filename=(File::Spec->splitpath($filename))[1] if (-f $filename);
+	if ($sortby && $sortby =~ m/^(size|atime|mtime|ctime)$/) {
+		@files = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$sortby()." $_", @files));
+	} else {
+		@files = sort @files;
+	}
+	return @files;
 }
 
 1;
@@ -1489,6 +1566,12 @@ a slideshow. The default is '3 5 10 15 30'
 Instead of the default filename ordering you can sort by any
 stat attribute. For example size, atime, mtime, ctime.
 
+=item B<GalleryDirSortBy>
+
+Set this variable to sort directories differently than other items,
+can be set to size, atime, mtime and ctime; setting any other value
+will revert to sorting by name.
+
 =item B<GalleryMemoize>
 
 Cache EXIF data using Memoize - this will make Apache::Gallery faster
@@ -1607,7 +1690,25 @@ Blue:
 Transparent orange:
         PerlSetVar      GalleryCopyrightColor '255,127,0,127'
 
-=back
+=item B<GalleryQuality>
+
+The quality (1-100) of scaled images
+
+This setting affects the quality of the scaled images.
+Set this to a low number to reduce the size of the scaled images.
+Remember to clear out your cache if you change this setting.
+Quality seems to default to 75, at least in the jpeg and png loader code in
+Imlib2 1.1.0.
+
+Examples:
+
+Quality at 50:
+        PerlSetVar      GalleryQuality '50'
+
+=item B<GalleryUnderscoresToSpaces>
+
+Set this option to 1 to convert underscores to spaces in the listing
+of directory names.
 
 =head1 FEATURES
 
@@ -1638,7 +1739,7 @@ the number 1 inside of it.
 
 =item B<Comments>
 
-To include comments for a directory you create a directory.comment
+To include comments for a directory you create a <directory>.comment
 file where the first line can contain "TITLE: New title" which
 will be the title of the page, and a comment on the following 
 lines.
@@ -1673,7 +1774,7 @@ with the visible name of the folder.
 
 =item B<Image::Size>
 
-=item B<CGI::FastTemplate>
+=item B<Text::Template>
 
 =item B<Image::Imlib2>
 
@@ -1691,7 +1792,7 @@ Michael Legart <michael@legart.dk>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2001-2003 Michael Legart <michael@legart.dk>
+Copyright (C) 2001-2004 Michael Legart <michael@legart.dk>
 
 Templates designed by Thomas Kjaer <tk@lnx.dk>
 

@@ -1,5 +1,5 @@
-$Author: mil $ $Rev: 134 $
-$Date: 2003-05-24 16:06:12 +0200 (Sat, 24 May 2003) $
+$Author: mil $ $Rev: 255 $
+$Date: 2004-04-12 19:49:02 +0200 (Mon, 12 Apr 2004) $
 
 - Write a gallery-cleancache.pl script for removing entries in
   the cache where the original picture has been removed.
