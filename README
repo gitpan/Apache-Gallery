@@ -19,7 +19,16 @@ CONFIGURATION
     The options are set in the httpd.conf/.htaccess file using the syntax:
     PerlSetVar OptionName 'value'
 
-    Example: PerlSetVar GallerCachedir '/var/tmp/Apache-Gallery/'
+    Example: PerlSetVar GallerCacheDir '/var/tmp/Apache-Gallery/'
+
+    GalleryAutoRotate
+        Some cameras, like the Canon G3, can detect the orientation of a the
+        pictures you take and will save this information in the
+        'Orientation' EXIF field. Apache::Gallery will then automaticly
+        rotate your images.
+
+        This behavior is default but can be disabled by setting
+        GalleryAutoRotate to 0.
 
     GalleryCacheDir
         Directory where Apache::Gallery should create its cache with scaled
@@ -84,10 +93,20 @@ CONFIGURATION
         With this option you can configure which intervals can be selected
         for a slideshow. The default is '3 5 10 15 30'
 
+    GallerySortBy
+        Instead of the default filename ordering you can sort by any stat
+        attribute. For example size, atime, mtime, ctime.
+
 FEATURES
     Rotate images
-        Pictures can be rotated on the fly without modifying the original
-        image.
+        Some cameras, like the Canon G3, detects the orientation of a
+        picture and adds this info to the EXIF header. Apache::Gallery
+        detects this and automaticly rotates images with this info.
+
+        If your camera does not support this, you can rotate the images
+        manually, This can also be used to override the rotate information
+        from a camera that supports that. You can also disable this behavior
+        with the GalleryAutoRotate option.
 
         To use this functionality you have to create file with the name of
         the picture you want rotated appened with ".rotate". The file should
@@ -102,7 +121,10 @@ FEATURES
         "Picture1234.jpg.rotate" with the number 1 inside of it.
 
     Comments
-        To include comments for each picture you create files called
+        To include comments for a directory you create a directory.comment
+        file where the first line can contain "TITLE: New title" which will
+        be the title of the page, and a comment on the following lines. To
+        include comments for each picture you create files called
         picture.jpg.comment where the first line can contain "TITLE: New
         title" which will be the title of the page, and a comment on the
         following lines.
@@ -112,6 +134,10 @@ FEATURES
                 TITLE: This is the new title of the page
                 And this is the comment.<br>
                 And this is line two of the comment.
+
+        The visible name of the folder is by default identical to the name
+        of the folder, but can be changed by creating a file
+        <directory>.folder with the visible name of the folder.
 
 DEPENDENCIES
     Perl 5
@@ -125,7 +151,6 @@ DEPENDENCIES
     X11 libraries (ie, XFree86)
     Imlib2 Remember the -dev package when using rpm, deb or other package
     formats!
-    Test::MockObject If you want complete testing of Apache::Gallery
 
 BUGS
     Fatal errors are showed on a page with a HTTP OK return code. This is
@@ -149,7 +174,7 @@ COPYRIGHT AND LICENSE
 
 THANKS
     Thanks to Thomas Kjaer for templates and design of
-    http://apachegallery.dk Thanks to Thomas Eibner and others for patches.
+    http://apachegallery.dk Thanks to Thomas Eibner and other for patches.
     (See the Changes file)
 
 SEE ALSO

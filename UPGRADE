@@ -1,5 +1,23 @@
-# $Author: apj $ $Rev: 90 $
-# $Date: 2002-10-25 14:52:25 +0200 (Fri, 25 Oct 2002) $
+# $Author: mil $ $Rev: 121 $
+# $Date: 2003-03-01 20:56:15 +0100 (Sat, 01 Mar 2003) $
+
+For users upgrading from 0.5.1 to 0.6
+
+templates/movie.tpl has been removed and replaced by
+templates/file.tpl
+
+Remember to update templates/picture.tpl
+
+htdocs/video-wmv.png
+htdocs/application-doc.png
+htdocs/application-mp3.png
+htdocs/application-ogg.png
+htdocs/application-pdf.png
+htdocs/application-rtf.png
+htdocs/application-wav.png
+
+have been added and should be copied to our Apache icons
+directory.
 
 For users upgrading from 0.5 to 0.5.1
 

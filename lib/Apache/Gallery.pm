@@ -1,13 +1,13 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 88 $
-# $Date: 2002-10-24 14:41:49 +0200 (Thu, 24 Oct 2002) $
+# $Author: mil $ $Rev: 123 $
+# $Date: 2003-04-21 13:26:49 +0200 (Mon, 21 Apr 2003) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "0.5.1";
+$VERSION = "0.6";
 
 use Apache ();
 use Apache::Constants qw(:common);
@@ -24,10 +24,12 @@ use URI::Escape;
 # Regexp for escaping URI's
 my $escape_rule = "^A-Za-z0-9\-_.!~*'()\/";
 
-use Inline C => Config => 
+use Inline (C => Config => 
 				LIBS => '-L/usr/X11R6/lib -lImlib2 -lm -ldl -lXext -lXext',
-				DIRECTORY => File::Spec->tmpdir(),
-				INC => '-I/usr/X11R6/include';
+				INC => '-I/usr/X11R6/include',
+				UNTAINT => 1,
+				DIRECTORY => File::Spec->tmpdir()
+			);
 
 use Inline 'C';
 Inline->init;
@@ -37,7 +39,7 @@ sub handler {
 	my $r = shift or Apache->request();
 
 	$r->header_out("X-Powered-By","apachegallery.dk $VERSION - Hest design!");
-	$r->header_out("X-Gallery-Version", '$Rev: 88 $ $Date: 2002-10-24 14:41:49 +0200 (Thu, 24 Oct 2002) $');
+	$r->header_out("X-Gallery-Version", '$Rev: 123 $ $Date: 2003-04-21 13:26:49 +0200 (Mon, 21 Apr 2003) $');
 
 	# Just return the http headers if the client requested that
 	if ($r->header_only) {
@@ -47,32 +49,18 @@ sub handler {
 
 	my $apr = Apache::Request->instance($r, DISABLE_UPLOADS => 1, POST_MAX => 1024);
 
-	# Is the file being fetched from the cache? Let's feed it from the cache outside the webscope.
-	if ($r->uri =~ m/\.cache/i) {
-
-		my $cached = cache_dir($r, 0);
-
-		$cached =~ s/\/\.cache//;
-		unless (open(FILE, "$cached")) {
-			$r->log_error("Error opening $cached: $!\n");
-			return SERVER_ERROR;
-		}
-
-		if ($r->uri =~ m/\.(jpe?g|png|tiff?|ppm)$/i) {
-			$r->content_type("image/$1");
-		}
-
-		$r->send_http_header;
-		$r->send_fd("FILE");
-		close(FILE);
-
-		return OK;
-
-	}
-
 	# Let Apache serve icons and files from the cache without us
 	# modifying the request
-	if ($r->uri =~ m/(^\/icons|\.cache)/i) {
+	if ($r->uri =~ m/^\/icons/i) {
+		return DECLINED;
+	}
+	if ($r->uri =~ m/\.cache\//i) {
+		my $file = cache_dir($r, 0);
+		$file =~ s/\/\.cache//;
+		my $subr = $r->lookup_file($file);
+		$r->content_type($subr->content_type());
+		$r->path_info('');
+		$r->filename($file);
 		return DECLINED;
 	}
 
@@ -85,7 +73,7 @@ sub handler {
 
 	unless (-f $filename or -d $filename) {
 	
-		show_error($r, "404!", "No such file or directory: ".$r->uri);
+		show_error($r, "404!", "No such file or directory: ".uri_escape($r->uri, $escape_rule));
 		return OK;
 	}
 
@@ -109,10 +97,12 @@ sub handler {
 			index     => 'index.tpl',
 			directory => 'directory.tpl',
 			picture   => 'picture.tpl',
-			movie     => 'movie.tpl'
+			file      => 'file.tpl',
+			comment   => 'dircomment.tpl',
+			nocomment => 'nodircomment.tpl'
 		);
 
-		$tpl->assign(TITLE => "Index of: ".$uri);
+		$tpl->assign(TITLE => "Index of: ".uri_escape($uri, $escape_rule));
 		$tpl->assign(META => " ");
 
 		unless (opendir (DIR, $filename)) {
@@ -126,17 +116,24 @@ sub handler {
 		my @files = grep { !/^\./ && -f "$filename/$_" } readdir (DIR);
 		@files = sort @files;
 
-		my @movies;
+		my $sortby = $r->dir_config('GallerySortBy');
+		if ($sortby && $sortby =~ m/^(size|atime|mtime|ctime)$/) {
+			@files = map(/^\d+ (.*)/, sort map(stat("$filename/$_")->$sortby." $_", @files));
+		} else {
+			@files = sort @files;
+		}
+
+		my @downloadable_files;
 
 		if (@files) {
-			# Remove unwanted files and movies from list
+			# Remove unwanted files from list
 			my @new_files = ();
 			foreach my $picture (@files) {
 
 				my $file = $topdir."/".$picture;
 
-				if ($file =~ m/\.(mpe?g|mov|avi|asf)$/i) {
-					push (@movies, $picture);
+				if ($file =~ m/\.(mpe?g|mov|avi|asf|wmv|wav|rtf|pdf|ogg|mp3|doc)$/i) {
+					push (@downloadable_files, $picture);
 				}
 
 				if ($file =~ m/\.(?:jpe?g|png|tiff?|ppm)$/i) {
@@ -157,7 +154,7 @@ sub handler {
 		my @listing;
 		push (@listing, @directories);
 		push (@listing, @files);
-		push (@listing, @movies);
+		push (@listing, @downloadable_files);
 		
 		if (@listing) {
 
@@ -179,16 +176,26 @@ sub handler {
 					$tpl->parse(FILES => '.directory');
 
 				}
-				elsif (-f $thumbfilename && $thumbfilename =~ m/\.(mpe?g|avi|mov|asf)$/i) {
+				elsif (-f $thumbfilename && $thumbfilename =~ m/\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav)$/i) {
 					my $type = lc($1);
 					my $stat = stat($thumbfilename);
 					my $size = $stat->size;
+					my $filetype;
+
+					if ($thumbfilename =~ m/\.(mpe?g|avi|mov|asf|wmv)$/i) {
+						$filetype = "video";
+					}
+					else {
+						$filetype = "application";
+					}
+
 					$tpl->assign(FILEURL => uri_escape($fileurl, $escape_rule), 
 					             ALT => "Size: $size Bytes", 
 					             FILE => $file, 
-					             TYPE => $type);
+					             TYPE => $type,
+					             FILETYPE => $filetype);
 
-					$tpl->parse(FILES => '.movie');						 
+					$tpl->parse(FILES => '.file');						 
 
 				}
 				elsif (-f $thumbfilename) {
@@ -200,14 +207,16 @@ sub handler {
 
 					next unless (grep $type eq $_, @filetypes);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $width, $height);	
-					my $cached = scale_picture($r, $thumbfilename, $thumbnailwidth, $thumbnailheight);
-
 					my $imageinfo = get_imageinfo($r, $thumbfilename, $type, $width, $height);
+					my $cached = scale_picture($r, $thumbfilename, $thumbnailwidth, $thumbnailheight, $imageinfo);
 
+					my $rotate = readfile_getnum($r, $imageinfo, $thumbfilename.".rotate");
 					$tpl->assign(FILEURL => uri_escape($fileurl, $escape_rule));
 					$tpl->assign(FILE    => $file);
 					$tpl->assign(DATE    => $imageinfo->{DateTimeOriginal} ? $imageinfo->{DateTimeOriginal} : ''); # should this really be a stat of the file instead of ''?
 					$tpl->assign(SRC     => uri_escape($uri."/.cache/$cached", $escape_rule));
+					$tpl->assign(HEIGHT => ($rotate ? $thumbnailwidth : $thumbnailheight));
+					$tpl->assign(WIDTH => ($rotate ? $thumbnailheight : $thumbnailwidth));
 
 					$tpl->parse(FILES => '.picture');
 
@@ -219,10 +228,20 @@ sub handler {
 			$tpl->assign(FILES => "No files found");
 		}
 
+		if (-e $topdir . '.comment' && -f $topdir . '.comment') {
+			my $comment_ref = get_comment($topdir . '.comment');
+			$tpl->assign(COMMENT => $comment_ref->{COMMENT} . '<br>') if $comment_ref->{COMMENT};
+			$tpl->assign(TITLE => $comment_ref->{TITLE}) if $comment_ref->{TITLE};
+			$tpl->parse(DIRCOMMENT => 'comment');
+		} else {
+			$tpl->parse(DIRCOMMENT => 'nocomment');
+		}
+
 		$tpl->parse("MAIN", ["index", "layout"]);
 		my $content = $tpl->fetch("MAIN");
 
 		$r->content_type('text/html');
+		$r->header_out('Content-Length', length(${$content}));
 		$r->send_http_header;
 
 		$r->print(${$content});
@@ -267,7 +286,7 @@ sub handler {
 		my @sizes = split (/ /, $r->dir_config('GallerySizes') ? $r->dir_config('GallerySizes') : '640 800 1024 1600');
 		if ($apr->param('width')) {
 			unless ((grep $apr->param('width') == $_, @sizes) or ($apr->param('width') == $original_size)) {
-				show_error($r, "Invalid width", $apr->param('width')." is not an allowed width.");
+				show_error($r, "Invalid width", "The specified width is invalid");
 				return OK;
 			}
 			$width = $apr->param('width');
@@ -293,7 +312,7 @@ sub handler {
 		$width       = floor($width);
 		$height      = floor($height);
 
-		my $cached = scale_picture($r, $filename, $image_width, $height);
+		my $cached = scale_picture($r, $filename, $image_width, $height, $imageinfo);
 		
 		my $tpl = new CGI::FastTemplate($r->dir_config('GalleryTemplateDir'));
 
@@ -318,7 +337,7 @@ sub handler {
 		$tpl->assign(META => " ");
 		$tpl->assign(RESOLUTION => "$image_width x $height");
 		$tpl->assign(MENU => generate_menu($r));
-		$tpl->assign(SRC => ".cache/".$cached);
+		$tpl->assign(SRC => uri_escape(".cache/$cached", $escape_rule));
 		$tpl->assign(URI => $r->uri());
 
 		unless (opendir(DATADIR, $path)) {
@@ -349,7 +368,8 @@ sub handler {
 				if ($prevpicture and $displayprev) {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$prevpicture);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
-					my $cached = scale_picture($r, $path.$prevpicture, $thumbnailwidth, $thumbnailheight);
+					my $imageinfo = get_imageinfo($r, $path.$prevpicture, $type, $orig_width, $orig_height);
+					my $cached = scale_picture($r, $path.$prevpicture, $thumbnailwidth, $thumbnailheight, $imageinfo);
 					$tpl->assign(URL       => uri_escape($prevpicture, $escape_rule));
 					$tpl->assign(FILENAME  => $prevpicture);
 					$tpl->assign(WIDTH     => $width);
@@ -369,7 +389,8 @@ sub handler {
 				if ($nextpicture) {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$nextpicture);
 					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
-					my $cached = scale_picture($r, $path.$nextpicture, $thumbnailwidth, $thumbnailheight);
+					my $imageinfo = get_imageinfo($r, $path.$nextpicture, $type, $thumbnailwidth, $thumbnailheight);
+					my $cached = scale_picture($r, $path.$nextpicture, $thumbnailwidth, $thumbnailheight, $imageinfo);
 					$tpl->assign(URL       => uri_escape($nextpicture, $escape_rule));
 					$tpl->assign(FILENAME  => $nextpicture);
 					$tpl->assign(WIDTH     => $width);
@@ -455,7 +476,7 @@ sub handler {
 			$tpl->parse(SLIDESHOW => '.slideshowoff');
 
 			unless ((grep $apr->param('slideshow') == $_, @slideshow_intervals)) {
-				show_error($r, "Invalid interval", $apr->param('slideshow')." is not an allowed interval.");
+				show_error($r, "Invalid interval", "Invalid slideshow interval choosen");
 				return OK;
 			}
 
@@ -471,6 +492,7 @@ sub handler {
 		my $content = $tpl->fetch("MAIN");
 
 		$r->content_type('text/html');
+		$r->header_out('Content-Length', length(${$content}));
 		$r->send_http_header;
 
 		$r->print(${$content});
@@ -543,7 +565,7 @@ sub mkdirhier {
 
 sub scale_picture {
 
-	my ($r, $fullpath, $width, $height) = @_;
+	my ($r, $fullpath, $width, $height, $imageinfo) = @_;
 
 	my @dirs = split(/\//, $fullpath);
 	my $filename = pop(@dirs);
@@ -601,11 +623,7 @@ sub scale_picture {
 	if ($scale) {
 
 		my $newpath = $cache."/".$newfilename;
-		my $rotate = 0;
-
-		if (-f $fullpath . ".rotate") {
-		    $rotate = readfile_getnum($fullpath . ".rotate");
-		}
+		my $rotate = readfile_getnum($r, $imageinfo, $fullpath . ".rotate");
 
 		if ($width == $thumbnailwidth or $width == $thumbnailheight) {
 		    resizepicture($fullpath, $newpath, $width, $height, $rotate, '');
@@ -697,15 +715,108 @@ sub get_imageinfo {
 						"0"  => "No",
 						"1"  => "Yes",
 						"9"  => "Yes",
-						"16" => "No (Compulsory)",
+						"16" => "No (Compulsory) Should be External Flash",
 						"24" => "No",
 						"25" => "Yes (Auto)",
 						"73" => "Yes (Compulsory, Red Eye Reducing)",
 						"89" => "Yes (Auto, Red Eye Reducing)"
 					);
-					$exif_value = $flashmodes{$exif_value};
+					$exif_value = defined $flashmodes{$exif_value} ? $flashmodes{$exif_value} : 'unknown flash mode';
 				}
 				$value = $exif_value;
+			}
+			if ($exif_key eq 'MeteringMode') {
+				my $exif_value = $imageinfo->{$exif_key};
+				if ($exif_value =~ /^\d+$/) {
+					my %meteringmodes = (
+						'0' => 'unknown',
+						'1' => 'Average',
+						'2' => 'CenterWeightedAverage',
+						'3' => 'Spot',
+						'4' => 'MultiSpot',
+						'5' => 'Pattern',
+						'6' => 'Partial',
+						'255' => 'Other'
+					);
+					$exif_value = defined $meteringmodes{$exif_value} ? $meteringmodes{$exif_value} : 'unknown metering mode';
+				}
+				$value = $exif_value;
+				
+			}
+			if ($exif_key eq 'LightSource') {
+				my $exif_value = $imageinfo->{$exif_key};
+				if ($exif_value =~ /^\d+$/) {
+					my %lightsources = (
+						'0' => 'unknown',
+						'1' => 'Daylight',
+						'2' => 'Fluorescent',
+						'3' => 'Tungsten (incandescent light)',
+						'4' => 'Flash',
+						'9' => 'Fine weather',
+						'10' => 'Cloudy weather',
+						'11' => 'Shade',
+						'12' => 'Daylight fluorescent',
+						'13' => 'Day white fluorescent',
+						'14' => 'Cool white fluorescent',
+						'15' => 'White fluorescent',
+						'17' => 'Standard light A',
+						'18' => 'Standard light B',
+						'19' => 'Standard light C',
+						'20' => 'D55',
+						'21' => 'D65',
+						'22' => 'D75',
+						'23' => 'D50',
+						'24' => 'ISO studio tungsten',
+						'255' => 'other light source'
+					);
+					$exif_value = defined $lightsources{$exif_value} ? $lightsources{$exif_value} : 'unknown light source';
+				}
+				$value = $exif_value;
+			}
+			if ($exif_key eq 'FocalLength') {
+				if ($value =~ /^(\d+)\/(\d+)$/) {
+					$value = eval { $1 / $2 };
+					if ($@) {
+						$value = $@;
+					} else {
+						$value = int($value + 0.5) . "mm";
+
+					}
+				}
+			}
+			if ($exif_key eq 'ShutterSpeedValue') {
+				if ($value =~ /^((?:\-)?\d+)\/(\d+)$/) {
+					$value = eval { $1 / $2 };
+					if ($@) {
+						$value = $@;
+					} else {
+						eval {
+							$value = 1/(exp($value*log(2)));
+							if ($value < 1) {
+								$value = "1/" . (int((1/$value)));
+							} else {
+						  	 	$value = int($value*10)/10; 
+							}
+						};
+						if ($@) {
+							$value = $@;
+						} else {
+							$value = $value . " sec";
+						}
+					}
+				}
+			}
+			if ($exif_key eq 'ApertureValue') {
+				if ($value =~ /^(\d+)\/(\d+)$/) {
+					$value = eval { $1 / $2 };
+					if ($@) {
+						$value = $@;
+					} else {
+						# poor man's rounding
+						$value = int(exp($value*log(2)*0.5)*10)/10;
+						$value = "f" . $value;
+					}
+				}
 			}
 			$imageinfo->{$human_key} = $value;
 		} 
@@ -715,18 +826,38 @@ sub get_imageinfo {
 }
 
 sub readfile_getnum {
-	my $filename = shift;
-	open(FH, "<$filename") or return 0;
-	my $temp = <FH>;
-	chomp($temp);
-	close(FH);
-	unless ($temp =~ /^\d$/) {
-		return 0;
+	my ($r, $imageinfo, $filename) = @_;
+
+	my $rotate = 0;
+
+	# Check to see if the image contains the Orientation EXIF key,
+	# but allow user to override using rotate
+	if (!defined($r->dir_config("GalleryAutoRotate")) 
+		|| $r->dir_config("GalleryAutoRotate") eq "1") {
+		if (defined($imageinfo->{Orientation})) {
+			if ($imageinfo->{Orientation} eq 'right_top') {
+				$rotate=1;
+			}	
+			elsif ($imageinfo->{Orientation} eq 'left_bot') {
+				$rotate=3;
+			}
+		}
 	}
-	unless ($temp == 1 || $temp == 2 || $temp == 3) {
-		return 0;
+
+	if (open(FH, "<$filename")) {
+		my $temp = <FH>;
+		chomp($temp);
+		close(FH);
+		unless ($temp =~ /^\d$/) {
+			$rotate = 0;
+		}
+		unless ($temp == 1 || $temp == 2 || $temp == 3) {
+			$rotate = 0;
+		}
+		$rotate = $temp;
 	}
-	return $temp;
+
+	return $rotate;
 }
 
 sub get_filecontent {
@@ -801,6 +932,16 @@ sub generate_menu {
 
 	my @links = split (/\//, $r->uri);
 
+	# Get the full path of the base directory
+	my $dirname;
+	{
+		my @direlem = split (/\//, $filename);
+		for my $i ( 0 .. ( scalar(@direlem) - scalar(@links) ) ) {
+			$dirname .= shift(@direlem) . '/';
+		}
+		chop $dirname;
+	}
+
 	my $picturename;
 	if (-f $filename) {
 		$picturename = pop(@links);	
@@ -818,6 +959,14 @@ sub generate_menu {
 		my $linktext = $link;
 		unless ($link) {
 			$linktext = "root: ";
+		}
+		else {
+			
+			$dirname = File::Spec->catdir($dirname, $link);
+
+			if (-e $dirname . ".folder") {
+				$linktext = get_filecontent($dirname . ".folder");
+			}
 		}
 
 		$menu .= "<a href=\"".uri_escape($menuurl, $escape_rule)."\">$linktext</a> / ";
@@ -932,6 +1081,16 @@ Example: B<PerlSetVar GallerCacheDir '/var/tmp/Apache-Gallery/'>
 
 =over 4
 
+=item B<GalleryAutoRotate>
+
+Some cameras, like the Canon G3, can detect the orientation of a 
+the pictures you take and will save this information in the 
+'Orientation' EXIF field. Apache::Gallery will then automaticly
+rotate your images. 
+
+This behavior is default but can be disabled by setting GalleryAutoRotate
+to 0.
+
 =item B<GalleryCacheDir>
 
 Directory where Apache::Gallery should create its cache with scaled
@@ -1003,6 +1162,11 @@ Set to 1 or 0, default is 0
 With this option you can configure which intervals can be selected for
 a slideshow. The default is '3 5 10 15 30'
 
+=item B<GallerySortBy>
+
+Instead of the default filename ordering you can sort by any
+stat attribute. For example size, atime, mtime, ctime.
+
 =back
 
 =head1 FEATURES
@@ -1011,7 +1175,14 @@ a slideshow. The default is '3 5 10 15 30'
 
 =item B<Rotate images>
 
-Pictures can be rotated on the fly without modifying the original image.
+Some cameras, like the Canon G3, detects the orientation of a picture
+and adds this info to the EXIF header. Apache::Gallery detects this
+and automaticly rotates images with this info.
+
+If your camera does not support this, you can rotate the images 
+manually, This can also be used to override the rotate information
+from a camera that supports that. You can also disable this behavior
+with the GalleryAutoRotate option.
 
 To use this functionality you have to create file with the name of the 
 picture you want rotated appened with ".rotate". The file should include 
@@ -1027,6 +1198,10 @@ the number 1 inside of it.
 
 =item B<Comments>
 
+To include comments for a directory you create a directory.comment
+file where the first line can contain "TITLE: New title" which
+will be the title of the page, and a comment on the following 
+lines.
 To include comments for each picture you create files called 
 picture.jpg.comment where the first line can contain "TITLE: New
 title" which will be the title of the page, and a comment on the
@@ -1037,6 +1212,10 @@ Example:
 	TITLE: This is the new title of the page
 	And this is the comment.<br>
 	And this is line two of the comment.
+
+The visible name of the folder is by default identical to the name of
+the folder, but can be changed by creating a file <directory>.folder
+with the visible name of the folder.
 
 =back
 
