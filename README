@@ -72,6 +72,12 @@ CONFIGURATION
 
         Defaults to '100x75'
 
+    GalleryThumbnailSizeLS
+        If set to '1', GalleryThumbnailSize is the long and the short side
+        of the thumbnail image instead of the width and height.
+
+        Defaults to '0'.
+
     GalleryCopyrightImage
         Image you want to blend into your images in the lower right corner.
         This could be a transparent png saying "copyright my name 2001".
@@ -134,6 +140,72 @@ CONFIGURATION
     GalleryRootText
         Change the name that appears as the root element in the menu. The
         default is "root:"
+
+    GalleryMaxThumbnailsPerPage
+        This options controls how many thumbnails should be displayed in a
+        page. It requires $BROWSELINKS to be in the index.tpl template file.
+
+    GalleryImgFile
+        Pattern matching the files you want Apache::Gallery to view in the
+        index as thumbnails.
+
+        The default is '\.(jpe?g|png|tiff?|ppm)$'
+
+    GalleryDocFile
+        Pattern matching the files you want Apache::Gallery to view in the
+        index as normal files. All other filetypes will still be served by
+        Apache::Gallery but are not visible in the index.
+
+        The default is
+        '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|html?|csv|eps)
+        $'
+
+    GalleryTTFDir
+        To use the GalleryCopyrightText feature you must set this option to
+        the directory where your True Type fonts are stored. No default is
+        set.
+
+        Example:
+
+                PerlSetVar      GalleryTTFDir '/usr/share/fonts/'
+
+    GalleryTTFFile
+        To use the GalleryCopyrightText feature this option must be set to
+        the name of the True Type font you wish to use. Example:
+
+                PerlSetVar      GalleryTTFFile 'verdanab.ttf'
+
+    GalleryTTFSize
+        Configure the size of the CopyrightText that will be inserted as
+        copyright notice in the corner of your pictures.
+
+        Example:
+
+                PerlSetVar      GalleryTTFSize '10'
+
+    GalleryCopyrightText
+        The text that will be inserted as copyright notice.
+
+        Example:
+
+                PerlSetVar      GalleryCopyrightText '(c) Michael Legart'
+
+    GalleryCopyrightColor
+        The text color of your copyright notice.
+
+        Examples:
+
+        White: PerlSetVar GalleryCopyrightColor '255,255,255,255'
+
+        Black: PerlSetVar GalleryCopyrightColor '0,0,0,255'
+
+        Red: PerlSetVar GalleryCopyrightColor '255,0,0,255'
+
+        Green: PerlSetVar GalleryCopyrightColor '0,255,0,255'
+
+        Blue: PerlSetVar GalleryCopyrightColor '0,0,255,255'
+
+        Transparent orange: PerlSetVar GalleryCopyrightColor '255,127,0,127'
 
 FEATURES
     Rotate images

@@ -1,5 +1,19 @@
-# $Author: mil $ $Rev: 193 $
-# $Date: 2003-09-07 19:08:29 +0200 (Sun, 07 Sep 2003) $
+# $Author: mil $ $Rev: 230 $
+# $Date: 2004-01-02 13:39:36 +0100 (Fri, 02 Jan 2004) $
+
+For users upgrading from 0.7 to snapshot
+
+You need to create new directory called gallery in Apaches
+icons directory. Copy the png files from the htdocs dictory
+to this new directory.
+
+For those of you with pre-existing templates, a simple
+
+   cd templates; perl -pi -e 's/(?<!\\)(\$[\w\_\d]+)/\{ $1 \}/g'
+
+should get your templates but directory.tpl and file.tpl
+working correctly. The last two needs to be updated from
+the distribution.
 
 For users upgrading from 0.6 to 0.7
 
@@ -16,7 +30,10 @@ to your DocumentRoot.
 
 To update to the new layout, copy templates/new/gallery.css 
 to your DocumentRoot and copy templates/new/*.tpl to your
-GalleryTemplateDir. 
+GalleryTemplateDir and set the following option in your virtual
+host:
+
+PerlSetVar GalleryEXIFMode 'values'
 
 For users upgrading from 0.5.1 to 0.6
 
