@@ -1,4 +1,5 @@
-$Id: README,v 1.27 2002/06/05 15:13:36 mil Exp $
+$Author: mil $ $Rev: 27 $
+$Date: 2002-07-28 23:29:29 +0200 (Sun, 28 Jul 2002) $
 
 NAME
     Apache::Gallery - mod_perl handler to create an image gallery
@@ -49,7 +50,7 @@ CONFIGURATION
         You can view all the keys from the EXIF header using this
         perl-oneliner:
 
-        perl -e 'use Data::Dumper; use Image::Info qw(image_info); print
+        perl "-e" 'use Data::Dumper; use Image::Info qw(image_info); print
         Dumper(image_info(shift));' filename.jpg
 
         Default is: 'Picture Taken => DateTimeOriginal, Flash => Flash'
@@ -107,7 +108,7 @@ FEATURES
         following lines.
 
         Example: TITLE: This is the new title of the page And this is the
-        comment.
+        comment.<br> And this is line two of the comment.
 
 DEPENDENCIES
     Perl 5.6

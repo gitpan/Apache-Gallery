@@ -1,6 +1,18 @@
-$Id: Changes,v 1.35 2002/06/02 16:12:34 thomas Exp $
+$Author: mil $ $Rev: 32 $
+$Date: 2002-08-11 17:40:25 +0200 (Sun, 11 Aug 2002) $
 
 Revision history for Perl extension Apache::Gallery.
+
+0.4.1 Sun Aug 11 17:48:09 CEST 2002
+
+	- URI Escape image URL in the size selection URLs. (Me)
+	- Fixed bug where .cache directory was not created when requesting images directly (Me)
+	- Don't allow scaling images more than their original size (Jan Chrillesen)
+	- Handle already rotated images correct (Jan Chrillesen, Me)
+	- Fix bug when rotating pictures and a .thm file was present (Thomas Eibner)
+	- Apache::Gallery now allows for regular files to be served correctly (Thomas Eibner)
+	- Support for detailed flash information from Image::Info 1.11 (Me, Allan Joergensen)
+	- Moved Apache::Gallery into subversion revision control instead of CVS (Me)
 
 0.4 Sun Jun  2 13:11:09 CEST 2002
 
