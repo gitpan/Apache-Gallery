@@ -1,5 +1,13 @@
-# $Author: mil $ $Rev: 54 $
-# $Date: 2002-09-15 11:52:40 +0200 (Sun, 15 Sep 2002) $
+# $Author: apj $ $Rev: 90 $
+# $Date: 2002-10-25 14:52:25 +0200 (Fri, 25 Oct 2002) $
+
+For users upgrading from 0.5 to 0.5.1
+
+InlineDir is no longer honored, File::Spec is used to find a temporary
+directory (usually /tmp)
+Since 0.5, your .cache subdirectories are no longer used and can be
+safely deleted. All cached images are now kept in
+/var/tmp/Apache-Gallery/ unless you set GalleryCacheDir.
 
 For users upgrading from 0.4 to 0.5
 

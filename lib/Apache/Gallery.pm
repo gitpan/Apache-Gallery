@@ -1,13 +1,13 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 54 $
-# $Date: 2002-09-15 11:52:40 +0200 (Sun, 15 Sep 2002) $
+# $Author: mil $ $Rev: 88 $
+# $Date: 2002-10-24 14:41:49 +0200 (Thu, 24 Oct 2002) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "0.5";
+$VERSION = "0.5.1";
 
 use Apache ();
 use Apache::Constants qw(:common);
@@ -17,6 +17,7 @@ use Image::Info qw(image_info);
 use Image::Size qw(imgsize);
 use CGI::FastTemplate;
 use File::stat;
+use File::Spec;
 use POSIX qw(floor);
 use URI::Escape;
 
@@ -25,9 +26,8 @@ my $escape_rule = "^A-Za-z0-9\-_.!~*'()\/";
 
 use Inline C => Config => 
 				LIBS => '-L/usr/X11R6/lib -lImlib2 -lm -ldl -lXext -lXext',
-				DIRECTORY => Apache->request()->dir_config('InlineDir') ?  Apache->request()->dir_config('InlineDir') : "/tmp/",
-				INC => '-I/usr/X11R6/include',
-				ENABLE    => 'UNTAINT';
+				DIRECTORY => File::Spec->tmpdir(),
+				INC => '-I/usr/X11R6/include';
 
 use Inline 'C';
 Inline->init;
@@ -37,7 +37,7 @@ sub handler {
 	my $r = shift or Apache->request();
 
 	$r->header_out("X-Powered-By","apachegallery.dk $VERSION - Hest design!");
-	$r->header_out("X-Gallery-Version", '$Rev: 54 $ $Date: 2002-09-15 11:52:40 +0200 (Sun, 15 Sep 2002) $');
+	$r->header_out("X-Gallery-Version", '$Rev: 88 $ $Date: 2002-10-24 14:41:49 +0200 (Thu, 24 Oct 2002) $');
 
 	# Just return the http headers if the client requested that
 	if ($r->header_only) {
@@ -53,16 +53,16 @@ sub handler {
 		my $cached = cache_dir($r, 0);
 
 		$cached =~ s/\/\.cache//;
+		unless (open(FILE, "$cached")) {
+			$r->log_error("Error opening $cached: $!\n");
+			return SERVER_ERROR;
+		}
 
 		if ($r->uri =~ m/\.(jpe?g|png|tiff?|ppm)$/i) {
-
 			$r->content_type("image/$1");
-
 		}
 
 		$r->send_http_header;
-
-		open(FILE, "$cached");
 		$r->send_fd("FILE");
 		close(FILE);
 
@@ -199,7 +199,7 @@ sub handler {
 					my @filetypes = qw(JPG TIF PNG PPM);
 
 					next unless (grep $type eq $_, @filetypes);
-					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $thumbfilename, $width, $height);	
+					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $width, $height);	
 					my $cached = scale_picture($r, $thumbfilename, $thumbnailwidth, $thumbnailheight);
 
 					my $imageinfo = get_imageinfo($r, $thumbfilename, $type, $width, $height);
@@ -348,7 +348,7 @@ sub handler {
 				}	
 				if ($prevpicture and $displayprev) {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$prevpicture);
-					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $path.$prevpicture, $orig_width, $orig_height);	
+					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
 					my $cached = scale_picture($r, $path.$prevpicture, $thumbnailwidth, $thumbnailheight);
 					$tpl->assign(URL       => uri_escape($prevpicture, $escape_rule));
 					$tpl->assign(FILENAME  => $prevpicture);
@@ -368,7 +368,7 @@ sub handler {
 
 				if ($nextpicture) {
 					my ($orig_width, $orig_height, $type) = imgsize($path.$nextpicture);
-					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $path.$nextpicture, $orig_width, $orig_height);	
+					my ($thumbnailwidth, $thumbnailheight) = get_thumbnailsize($r, $orig_width, $orig_height);	
 					my $cached = scale_picture($r, $path.$nextpicture, $thumbnailwidth, $thumbnailheight);
 					$tpl->assign(URL       => uri_escape($nextpicture, $escape_rule));
 					$tpl->assign(FILENAME  => $nextpicture);
@@ -489,8 +489,12 @@ sub cache_dir {
 
 	unless ($r->dir_config('GalleryCacheDir')) {
 
-		$cache_root = "/var/tmp/Apache-Gallery/";
-		$cache_root .= ($r->server->is_virtual ? $r->server->server_hostname : $r->location);
+		$cache_root = '/var/tmp/Apache-Gallery/';
+		if ($r->server->is_virtual) {
+			$cache_root = File::Spec->catdir($cache_root, $r->server->server_hostname);
+		} else {
+			$cache_root = File::Spec->catdir($cache_root, $r->location);
+		}
 
 	} else {
 
@@ -498,19 +502,21 @@ sub cache_dir {
 
 	}
 
-	my @uri = split("/", $r->uri);
+	my (undef, $dirs, $filename) = File::Spec->splitpath($r->uri);
+	# We don't need a volume as this is a relative path
 
-	pop(@uri) if ($strip_filename);
-
-	return($cache_root . join("/", @uri));
-
+	if ($strip_filename) {
+		return(File::Spec->canonpath(File::Spec->catdir($cache_root, $dirs)));
+	} else {
+		return(File::Spec->canonpath(File::Spec->catfile($cache_root, $dirs, $filename)));
+	}
 }
 
 sub create_cache {
 
 	my ($r, $path) = @_;
 
-		unless (mkdirhier ($path, 0777)) {
+		unless (mkdirhier ($path)) {
 			show_error($r, $!, "Unable to create cache directory in $path: $!");
 			return 0;
 		}
@@ -613,7 +619,7 @@ sub scale_picture {
 }
 
 sub get_thumbnailsize {
-	my ($r, $filename, $orig_width, $orig_height) = @_;
+	my ($r, $orig_width, $orig_height) = @_;
 
 	my ($thumbnailwidth, $thumbnailheight) = split(/x/, ($r->dir_config('GalleryThumbnailSize') ?  $r->dir_config('GalleryThumbnailSize') : "100x75"));
 
@@ -745,7 +751,7 @@ sub get_comment {
 	open(FH, $filename) or return $comment_ref;
 	my $title = <FH>;
 	if ($title =~ /^TITLE: (.*)$/) {
-		$comment_ref->{TITLE} = $1;
+		chomp($comment_ref->{TITLE} = $1);
 	} 
 	else {
 		$comment_ref->{COMMENT} = $title;
@@ -922,17 +928,9 @@ directories.
 The options are set in the httpd.conf/.htaccess file using the syntax:
 B<PerlSetVar OptionName 'value'>
 
-Example: B<PerlSetVar InlineDir '/tmp/inline'>
+Example: B<PerlSetVar GallerCacheDir '/var/tmp/Apache-Gallery/'>
 
 =over 4
-
-=item B<InlineDir>
-
-Full path to the directory Inline should compile the inline c-code
-and store the shared objects. This is also where you can find debug
-information if the c-code fails to compile.
-
-Defaults to '/tmp'
 
 =item B<GalleryCacheDir>
 

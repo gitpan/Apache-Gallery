@@ -15,7 +15,7 @@ that you have the following installed:
 - Image::Info
 - Image::Size
 - CGI::FastTemplate
-- Inline(::C)
+- Inline::C
 - X11 libraries (ie, XFree86)
 - Imlib2 (http://prdownloads.sourceforge.net/enlightenment/imlib2-1.0.3.tar.gz)
 
@@ -25,10 +25,11 @@ with:
 
 apt-get install libimlib2-dev
 
-Then, to install the module run:
+Then, to install Apache::Gallery run the following commands:
 
    perl Makefile.PL
    make
+   make test (optional)
    make install
 
 Setup a virtualhostblock in httpd.conf, like this:
@@ -39,7 +40,6 @@ Setup a virtualhostblock in httpd.conf, like this:
 	ErrorLog     logs/gallery-error_log
 	TransferLog  logs/gallery-access_log
 	PerlSetVar   GalleryTemplateDir '/usr/local/apache/gallery/templates'
-	PerlSetVar   InlineDir '/usr/local/apache/Inline'
 	PerlSetVar   GalleryInfo 'Picture Taken => DateTimeOriginal, Flash => Flash' 
 	PerlSetVar   GallerySizes '640 1024 1600 2272'
 	PerlSetVar   GalleryThumbnailSize '100x75'
@@ -54,9 +54,9 @@ Copy the files from templates/ to where you pointed GalleryTemplateDir to,
 copy htdocs/folder.png and htdocs/video-*.png to your Apache icons 
 directory and copy htdocs/gallery.css to the DocumentRoot of your gallery.
 
-Create /usr/local/apache/Inline and make sure your httpd can write to this
-directory. This will be used by the Inline module to compile the c-code used
-to access functions in Imlib2
+Make sure your httpd can write to the temporary directory (usually /tmp).
+This will be used by the Inline module to compile the c-code used to
+access functions in Imlib2.
 
 It is possible to include a graphical copyright notice on each picture now.
 By setting the GalleryCopyrightImage PerlSetVar you can define the path
@@ -68,5 +68,9 @@ Apache::Gallery. You can write to michael@legart.dk
 Make sure you try the latest version of the gallery from 
 <http://apachegallery.dk/> before reporting bugs. 
 
-When reporting bugs please use this page:
+If you have problems installing Apache::Gallery, please make sure to run "make
+test" to see, what may be the problem.
+
+When reporting bugs please use this page and include the output from make test
+in your bugreport:
 <http://bugs.cpan.org/NoAuth/ReportBug.html?Queue=Apache%3A%3AGallery>
