@@ -1,4 +1,4 @@
-Apache/Gallery version 0.8
+Apache/Gallery version 1.0
 ===========================
 
 INSTALLATION
@@ -8,7 +8,7 @@ that you have the following installed:
 
 - Perl 5 (http://www.cpan.org/src/README.html)
 - Apache (http://httpd.apache.org/) - 1.3.x or 2.x
-- mod_perl (http://perl.apache.org/) - 1.x or 2.x (1.99)
+- mod_perl (http://perl.apache.org/) - 1.x or 2.x (2.0.0 or newer)
 - X11 libraries (ie, XFree86)
 - Imlib2 (http://prdownloads.sourceforge.net/enlightenment/imlib2-1.0.3.tar.gz)
 
@@ -18,8 +18,8 @@ Perl Modules: (Use http://search.cpan.org/ to find them)
 - Image::Info version 1.11. (NB NB NB: Version 1.12 is known to give problems)
 - Image::Size 
 - Text::Template
-- CGI
-- Image::Imlib2 (1.00)
+- CGI (3.08)
+- Image::Imlib2 (1.02)
 
 When installing Imlib2 from rpm, deb or other packages formats, remember
 that you need the imlib2-dev package too. On Debian this can be installed
@@ -31,6 +31,7 @@ Then, to install Apache::Gallery run the following commands:
 
    perl Makefile.PL
    make
+   export MOD_PERL_API_VERSION=2 # Only if you run mod_perl 2.0
    make test (optional)
    make install
 
@@ -42,7 +43,7 @@ your virtualhostblock to look like:
 	DocumentRoot /data/pictures/
 	ErrorLog     logs/gallery-error_log
 	TransferLog  logs/gallery-access_log
-	PerlSetVar   GalleryTemplateDir '/usr/local/apache/gallery/templates'
+	PerlSetVar   GalleryTemplateDir '/usr/local/apache/gallery/templates/default/'
 	PerlSetVar   GalleryInfo 'Picture Taken => DateTimeOriginal, Flash => Flash' 
 	PerlSetVar   GallerySizes '640 1024 1600 2272'
 	PerlSetVar   GalleryThumbnailSize '100x75'
@@ -61,7 +62,7 @@ like:
 	DocumentRoot /data/pictures/
 	ErrorLog     logs/gallery-error_log
 	TransferLog  logs/gallery-access_log
-	PerlSetVar   GalleryTemplateDir '/usr/local/apache/gallery/templates'
+	PerlSetVar   GalleryTemplateDir '/usr/local/apache/gallery/templates/default/'
 	PerlSetVar   GalleryInfo 'Picture Taken => DateTimeOriginal, Flash => Flash' 
 	PerlSetVar   GallerySizes '640 1024 1600 2272'
 	PerlSetVar   GalleryThumbnailSize '100x75'

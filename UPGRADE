@@ -1,7 +1,16 @@
-# $Author: mil $ $Rev: 255 $
-# $Date: 2004-04-12 19:49:02 +0200 (Mon, 12 Apr 2004) $
+# $Author: mil $ $Rev: 297 $
+# $Date: 2005-06-07 09:50:49 +0200 (Tue, 07 Jun 2005) $
 
-For users upgrading from 0.7 to snapshot
+For users upgrading to 1.0
+
+If you are using mod_perl2 version mod_perl-2.0 is now required.
+
+Also, CGI 3.08 is required if using mod_perl2.
+
+To enable access keys for navigation update the navpicture.tpl and
+showpicture.tpl templates.
+
+For users upgrading from 0.7 to 0.8
 
 You need to create new directory called gallery in Apaches
 icons directory. Copy the png files from the htdocs dictory
@@ -9,7 +18,7 @@ to this new directory.
 
 For those of you with pre-existing templates, a simple
 
-   cd templates; perl -pi -e 's/(?<!\\)(\$[\w\_\d]+)/\{ $1 \}/g'
+   cd templates; perl -pi -e 's/(?<!\\)(\$[\w\_\d]+)/\{ $1 \}/g' *.tpl
 
 should get your templates but directory.tpl and file.tpl
 working correctly. The last two needs to be updated from

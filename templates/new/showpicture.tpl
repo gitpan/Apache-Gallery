@@ -4,7 +4,7 @@
   </div>
 
   <div id="menu">
-{ $BACK } - <a href="./">up</a> - { $NEXT }</div>
+{ $BACK } - <a href="./" accesskey=u" rel="up" title="Accesskey U"><u>u</u>p</a> - { $NEXT }</div>
   <div>
     <table>
       <tr>
@@ -20,7 +20,7 @@
 	  <tr>
 	  	<td colspan="3">
 		  <div id="gallery">
-		  <a href="http://apachegallery.dk/">Apache::Gallery</a> &copy; 2001-2004 Michael Legart, <a href="http://www.hestdesign.com/">Hest Design</a>
+		  <a href="http://apachegallery.dk/">Apache::Gallery</a> &copy; 2001-2005 Michael Legart, <a href="http://www.hestdesign.com/">Hest Design</a>
 
 		  </div>
 		</td>
