@@ -1,7 +1,23 @@
-$Author: mil $ $Rev: 305 $
-$Date: 2005-09-16 10:28:30 +0200 (Fri, 16 Sep 2005) $
+$Author: mil $ $Rev: 324 $
+$Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $
 
 Revision history for Perl extension Apache::Gallery.
+
+1.0 Tue Feb 22 21:54:31 CET 2011
+
+	- Handle files that match both GalleryDocFile and GalleryImgFile
+	  correctly. (Claus Faerber)
+	- Only respond to HEAD and GET requests, enabling users to use
+	  WebDAV for upload (Andreas Plesner)
+	- Added new option GalleryCommentExifKey to get comments from
+	  EXIF data (Michael Legart)
+	- Added new option GalleryEnableMediaRss to enable generation of
+	  a media RSS feed for each directory listing. This works with
+	  e.g. the plugin from http://piclens.com to enable 3D viewing
+	  of your gallery. (Michael Legart)
+	- Make browser-caching work with mod_perl 2. Supports If-None-Match
+	  and If-Modified-Since headers. Sets Last-Modified-Date and
+	  ETag headers. (Michael Legart)
 
 1.0RC3 Fri Sep 16 10:27:48 CEST 2005
 

@@ -1,13 +1,13 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 305 $
-# $Date: 2005-09-16 10:28:30 +0200 (Fri, 16 Sep 2005) $
+# $Author: mil $ $Rev: 324 $
+# $Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "1.0RC3";
+$VERSION = "1.0";
 
 BEGIN {
 
@@ -25,7 +25,7 @@ BEGIN {
 		require Apache2::SubRequest;
 		require Apache2::Const;
 	
-		Apache2::Const->import(-compile => 'OK','DECLINED','FORBIDDEN','NOT_FOUND');
+		Apache2::Const->import(-compile => 'OK','DECLINED','FORBIDDEN','NOT_FOUND','HTTP_NOT_MODIFIED');
 
 		$::MP2 = 1;
 	} else {
@@ -50,6 +50,9 @@ use POSIX qw(floor);
 use URI::Escape;
 use CGI;
 use CGI::Cookie;
+use Encode;
+use HTTP::Date;
+use Digest::MD5 qw(md5_base64);
 
 use Data::Dumper;
 
@@ -61,6 +64,10 @@ sub handler {
 
 	my $r = shift or Apache2::RequestUtil->request();
 
+	unless (($r->method eq 'HEAD') or ($r->method eq 'GET')) {
+		return $::MP2 ? Apache2::Const::DECLINED() : Apache::Constants::DECLINED();
+	}
+
 	if ((not $memoized) and ($r->dir_config('GalleryMemoize'))) {
 		require Memoize;
 		Memoize::memoize('get_imageinfo');
@@ -68,11 +75,13 @@ sub handler {
 	}
 
 	$r->headers_out->{"X-Powered-By"} = "apachegallery.dk $VERSION - Hest design!";
-	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 305 $ $Date: 2005-09-16 10:28:30 +0200 (Fri, 16 Sep 2005) $';
+	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 324 $ $Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $';
 
 	my $filename = $r->filename;
 	$filename =~ s/\/$//;
 	my $topdir = $filename;
+
+	my $media_rss_enabled = $r->dir_config('GalleryEnableMediaRss');
 
 	# Just return the http headers if the client requested that
 	if ($r->header_only) {
@@ -81,7 +90,7 @@ sub handler {
 			$r->send_http_header;
 		}
 
-  	if (-f $filename or -d $filename) {
+		if (-f $filename or -d $filename) {
 			return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
 		}
 		else {
@@ -94,7 +103,7 @@ sub handler {
 	# Handle selected images
 	if ($cgi->param('selection')) {
 		my @selected = $cgi->param('selection');
-		my $content = join "<br>\n",@selected;
+		my $content = join "<br />\n",@selected;
 		$r->content_type('text/html');
 		$r->headers_out->{'Content-Length'} = length($content);
 
@@ -139,6 +148,20 @@ sub handler {
 		$r->content_type($subr->content_type());
 
 		if ($::MP2) {
+			my $fileinfo = stat($file);
+
+			my $nonce = md5_base64($fileinfo->ino.$fileinfo->mtime);
+			if ($r->headers_in->{"If-None-Match"} eq $nonce) {
+				return Apache2::Const::HTTP_NOT_MODIFIED();
+			}
+
+			if ($r->headers_in->{"If-Modified-Since"} && str2time($r->headers_in->{"If-Modified-Since"}) < $fileinfo->mtime) {
+				return Apache2::Const::HTTP_NOT_MODIFIED();
+			}
+
+			$r->headers_out->{"Content-Length"} = $fileinfo->size; 
+			$r->headers_out->{"Last-Modified-Date"} = time2str($fileinfo->mtime); 
+			$r->headers_out->{"ETag"} = $nonce;
 			$r->sendfile($file);
 			return Apache2::Const::OK();
 		}
@@ -185,13 +208,16 @@ sub handler {
 		# Instead of reading the templates every single time
 		# we need them, create a hash of template names and
 		# the associated Text::Template objects.
-		my %templates = create_templates({layout    => "$tpl_dir/layout.tpl",
-						  index     => "$tpl_dir/index.tpl",
-						  directory => "$tpl_dir/directory.tpl",
-						  picture   => "$tpl_dir/picture.tpl",
-						  file      => "$tpl_dir/file.tpl",
-						  comment   => "$tpl_dir/dircomment.tpl",
-						  nocomment => "$tpl_dir/nodircomment.tpl",
+		my %templates = create_templates({layout       => "$tpl_dir/layout.tpl",
+						  index        => "$tpl_dir/index.tpl",
+						  directory    => "$tpl_dir/directory.tpl",
+						  picture      => "$tpl_dir/picture.tpl",
+						  file         => "$tpl_dir/file.tpl",
+						  comment      => "$tpl_dir/dircomment.tpl",
+						  nocomment    => "$tpl_dir/nodircomment.tpl",
+						  rss          => "$tpl_dir/rss.tpl",
+						  rss_item     => "$tpl_dir/rss_item.tpl",
+						  navdirectory => "$tpl_dir/navdirectory.tpl",
 						 });
 
 
@@ -200,7 +226,11 @@ sub handler {
 		my %tpl_vars;
 
 		$tpl_vars{TITLE} = "Index of: $uri";
-		$tpl_vars{META} = " ";
+
+		if ($media_rss_enabled) {
+			# Put the RSS feed on all directory listings
+			$tpl_vars{META} = '<link rel="alternate" href="?rss=1" type="application/rss+xml" title="" id="gallery" />';
+		}
 
 		unless (opendir (DIR, $filename)) {
 			show_error ($r, 500, $!, "Unable to access directory $filename: $!");
@@ -226,13 +256,12 @@ sub handler {
 
 				my $file = $topdir."/".$picture;
 
-				if ($file =~ /$doc_pattern/i) {
-					push (@downloadable_files, $picture);
-					
-				}
-
 				if ($file =~ /$img_pattern/i) {
 					push (@new_files, $picture);
+				}
+
+				if ($file =~ /$doc_pattern/i) {
+					push (@downloadable_files, $picture);
 				}
 
 			}
@@ -336,8 +365,9 @@ sub handler {
 										    FILE    => $dirtitle,
 										   }
 									   );
+
 				}
-				elsif (-f $thumbfilename && $thumbfilename =~ /$doc_pattern/i) {
+				elsif (-f $thumbfilename && $thumbfilename =~ /$doc_pattern/i && $thumbfilename !~ /$img_pattern/i) {
 					my $type = lc($1);
 					my $stat = stat($thumbfilename);
 					my $size = $stat->size;
@@ -349,7 +379,7 @@ sub handler {
 						$filetype = "text-$type";
 					} elsif ($thumbfilename =~ m/\.(mp3|ogg|wav)$/i) {
 						$filetype = "sound-$type";
-					} elsif ($thumbfilename =~ m/\.(doc|pdf|rtf|csv|eps)$/i) {
+					} elsif ($thumbfilename =~ m/$doc_pattern/i) {
 						$filetype = "application-$type";
 					} else {
 						$filetype = "unknown";
@@ -389,6 +419,19 @@ sub handler {
 												 %file_vars,
 												},
 										       );
+
+					if ($media_rss_enabled) {
+						my ($content_image_width, undef, $content_image_height) = get_image_display_size($cgi, $r, $width, $height);
+						my %item_vars = ( 
+							THUMBNAIL => uri_escape($uri."/.cache/$cached", $escape_rule),
+							LINK      => uri_escape($fileurl, $escape_rule),
+							TITLE     => $file,
+							CONTENT   => uri_escape($uri."/.cache/".$content_image_width."x".$content_image_height."-".$file, $escape_rule)
+						);
+						$tpl_vars{ITEMS} .= $templates{rss_item}->fill_in(HASH => { 
+							%item_vars
+						});
+					}
 				}
 			}
 		}
@@ -397,10 +440,74 @@ sub handler {
 			$tpl_vars{BROWSELINKS} = "";
 		}
 
+		# Generate prev and next directory menu items
+		$filename =~ m/(.*)\/.*?$/;
+		my $parent_filename = $1;
+
+		$r->document_root =~ m/(.*)\/$/;
+		my $root_path = $1;
+		print STDERR "$filename vs $root_path\n";
+		if ($filename ne $root_path) {
+			unless (opendir (PARENT_DIR, $parent_filename)) {
+				show_error ($r, 500, $!, "Unable to access parent directory $parent_filename: $!");
+				return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
+			}
+	
+			my @neighbour_directories = grep { !/^\./ && -d "$parent_filename/$_" } readdir (PARENT_DIR);
+			my $dirsortby;
+			if (defined($r->dir_config('GalleryDirSortBy'))) {
+				$dirsortby=$r->dir_config('GalleryDirSortBy');
+			} else {
+				$dirsortby=$r->dir_config('GallerySortBy');
+			}
+			if ($dirsortby && $dirsortby =~ m/^(size|atime|mtime|ctime)$/) {
+				@neighbour_directories = map(/^\d+ (.*)/, sort map(stat("$parent_filename/$_")->$dirsortby()." $_", @neighbour_directories));
+			} else {
+				@neighbour_directories = sort @neighbour_directories;
+			}
+
+			closedir(PARENT_DIR);
+
+			my $neightbour_counter = 0;
+			foreach my $neighbour_directory (@neighbour_directories) {
+				if ($parent_filename.'/'.$neighbour_directory eq $filename) {
+					if ($neightbour_counter > 0) {
+						print STDERR "prev directory is " .$neighbour_directories[$neightbour_counter-1] ."\n";
+						my $linktext = $neighbour_directories[$neightbour_counter-1];
+						if (-e $parent_filename.'/'.$neighbour_directories[$neightbour_counter-1] . ".folder") {
+							$linktext = get_filecontent($parent_filename.'/'.$neighbour_directories[$neightbour_counter-1] . ".folder");
+						}
+						my %info = (
+						URL => "../".$neighbour_directories[$neightbour_counter-1],
+						LINK_NAME => "<<< $linktext",
+						DIR_FILES => "",
+						);
+  						$tpl_vars{PREV_DIR_FILES} = $templates{navdirectory}->fill_in(HASH=> {%info});
+						print STDERR $tpl_vars{PREV_DIR_FILES} ."\n";
+
+					}
+					if ($neightbour_counter < scalar @neighbour_directories - 1) {
+						my $linktext = $neighbour_directories[$neightbour_counter+1];
+						if (-e $parent_filename.'/'.$neighbour_directories[$neightbour_counter-1] . ".folder") {
+							$linktext = get_filecontent($parent_filename.'/'.$neighbour_directories[$neightbour_counter+1] . ".folder");
+						}
+						my %info = (
+						URL => "../".$neighbour_directories[$neightbour_counter+1],
+						LINK_NAME => "$linktext >>>",
+						DIR_FILES => "",
+						);
+  						$tpl_vars{NEXT_DIR_FILES} = $templates{navdirectory}->fill_in(HASH=> {%info});
+						print STDERR "next directory is " .$neighbour_directories[$neightbour_counter+1] ."\n";
+					}
+				}
+				$neightbour_counter++;
+			}
+		}
+
 		if (-f $topdir . '.comment') {
 			my $comment_ref = get_comment($topdir . '.comment');
 			my %comment_vars;
-			$comment_vars{COMMENT} = $comment_ref->{COMMENT} . '<br>' if $comment_ref->{COMMENT};
+			$comment_vars{COMMENT} = $comment_ref->{COMMENT} . '<br />' if $comment_ref->{COMMENT};
 			$comment_vars{TITLE} = $comment_ref->{TITLE} if $comment_ref->{TITLE};
 			$tpl_vars{DIRCOMMENT} = $templates{comment}->fill_in(HASH => \%comment_vars);
 			$tpl_vars{TITLE} = $comment_ref->{TITLE} if $comment_ref->{TITLE};
@@ -408,11 +515,15 @@ sub handler {
 			$tpl_vars{DIRCOMMENT} = $templates{nocomment}->fill_in(HASH=>\%tpl_vars);
 		}
 
-		$tpl_vars{MAIN} = $templates{index}->fill_in(HASH => \%tpl_vars);
+		if ($cgi->param('rss')) {
+			$tpl_vars{MAIN} = $templates{rss}->fill_in(HASH => \%tpl_vars);
+			$r->content_type('application/rss+xml');
+		} else {
+			$tpl_vars{MAIN} = $templates{index}->fill_in(HASH => \%tpl_vars);
+			$tpl_vars{MAIN} = $templates{layout}->fill_in(HASH => \%tpl_vars);
+			$r->content_type('text/html');
+		}
 
-		$tpl_vars{MAIN} = $templates{layout}->fill_in(HASH => \%tpl_vars);
-
-		$r->content_type('text/html');
 		$r->headers_out->{'Content-Length'} = length($tpl_vars{MAIN});
 
 		if (!$::MP2) {
@@ -448,54 +559,10 @@ sub handler {
 		}
 
 		my ($orig_width, $orig_height, $type) = imgsize($filename);
-		my $width = $orig_width;
 
 		my $imageinfo = get_imageinfo($r, $filename, $type, $orig_width, $orig_height);
 
-		my $original_size=$orig_height;
- 		if ($orig_width>$orig_height) {
-			$original_size=$orig_width;
- 		}
-
-		# Check if the selected width is allowed
-		my @sizes = split (/ /, $r->dir_config('GallerySizes') ? $r->dir_config('GallerySizes') : '640 800 1024 1600');
-
-		my %cookies = fetch CGI::Cookie;
-
-		if ($cgi->param('width')) {
-			unless ((grep $cgi->param('width') == $_, @sizes) or ($cgi->param('width') == $original_size)) {
-				show_error($r, 200, "Invalid width", "The specified width is invalid");
-				return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
-			}
-
-			$width = $cgi->param('width');
-			my $cookie = new CGI::Cookie(-name => 'GallerySize', -value => $width, -expires => '+6M');
-			$r->headers_out->{'Set-Cookie'} = $cookie;
-
-		} elsif ($cookies{'GallerySize'} && (grep $cookies{'GallerySize'}->value == $_, @sizes)) {
-
-			$width = $cookies{'GallerySize'}->value;
-
-		} else {
-			$width = $sizes[0];
-		}	
-
-		my $scale;
-		my $image_width;
-		if ($orig_width<$orig_height) {
-			$scale = ($orig_height ? $width/$orig_height: 1);
-			$image_width=$width*$orig_width/$orig_height;
-		}
-		else {
-			$scale = ($orig_width ? $width/$orig_width : 1);
-			$image_width = $width;
-		}
-
-		my $height = $orig_height * $scale;
-
-		$image_width = floor($image_width);
-		$width       = floor($width);
-		$height      = floor($height);
+		my ($image_width, $width, $height, $original_size) = get_image_display_size($cgi, $r, $orig_width, $orig_height);
 
 		my $cached = get_scaled_picture_name($filename, $image_width, $height);
 		
@@ -574,7 +641,7 @@ sub handler {
 					$tpl_vars{BACK} = $templates{navpicture}->fill_in(HASH => \%nav_vars);
 				}
 				else {
-					$tpl_vars{BACK} = "&nbsp";
+					$tpl_vars{BACK} = "&nbsp;";
 				}
 
 				$nextpicture = $pictures[$i+1];
@@ -609,8 +676,11 @@ sub handler {
 		if (-f $path . '/' . $picfilename . '.comment') {
 			my $comment_ref = get_comment($path . '/' . $picfilename . '.comment');
 			$foundcomment = 1;
-			$tpl_vars{COMMENT} = $comment_ref->{COMMENT} . '<br>' if $comment_ref->{COMMENT};
+			$tpl_vars{COMMENT} = $comment_ref->{COMMENT} . '<br />' if $comment_ref->{COMMENT};
 			$tpl_vars{TITLE} = $comment_ref->{TITLE} if $comment_ref->{TITLE};
+		} elsif ($r->dir_config('GalleryCommentExifKey')) {
+			my $comment = decode("utf8", $imageinfo->{$r->dir_config('GalleryCommentExifKey')});
+			$tpl_vars{COMMENT} = encode("iso-8859-1", $comment);
 		} else {
 			$tpl_vars{COMMENT} = '';
 		}
@@ -678,6 +748,7 @@ sub handler {
 		# Fill in sizes and determine if any are smaller than the
 		# actual image. If they are, $scaleable=1
 		my $scaleable = 0;
+		my @sizes = split (/ /, $r->dir_config('GallerySizes') ? $r->dir_config('GallerySizes') : '640 800 1024 1600');
 		foreach my $size (@sizes) {
 			if ($size<=$original_size) {
 				my %sizes_vars;
@@ -878,7 +949,7 @@ sub scale_picture {
 		# Check to see if the image has changed
 		my $filestat = stat($fullpath);
 		my $cachestat = stat($cache."/".$newfilename);
-		if ($filestat->mtime > $cachestat->mtime) {
+		if ($filestat->mtime >= $cachestat->mtime) {
 			$scale = 1;
 		}	
 
@@ -971,6 +1042,59 @@ sub get_thumbnailsize {
 	return ($width, $height);
 }
 
+sub get_image_display_size {
+	my ($cgi, $r, $orig_width, $orig_height) = @_;
+
+	my $width = $orig_width;
+
+	my $original_size=$orig_height;
+	if ($orig_width>$orig_height) {
+		$original_size=$orig_width;
+	}
+
+	# Check if the selected width is allowed
+	my @sizes = split (/ /, $r->dir_config('GallerySizes') ? $r->dir_config('GallerySizes') : '640 800 1024 1600');
+
+	my %cookies = fetch CGI::Cookie;
+
+	if ($cgi->param('width')) {
+		unless ((grep $cgi->param('width') == $_, @sizes) or ($cgi->param('width') == $original_size)) {
+			show_error($r, 200, "Invalid width", "The specified width is invalid");
+			return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
+		}
+
+		$width = $cgi->param('width');
+		my $cookie = new CGI::Cookie(-name => 'GallerySize', -value => $width, -expires => '+6M');
+		$r->headers_out->{'Set-Cookie'} = $cookie;
+
+	} elsif ($cookies{'GallerySize'} && (grep $cookies{'GallerySize'}->value == $_, @sizes)) {
+
+		$width = $cookies{'GallerySize'}->value;
+
+	} else {
+		$width = $sizes[0];
+	}	
+
+	my $scale;
+	my $image_width;
+	if ($orig_width<$orig_height) {
+		$scale = ($orig_height ? $width/$orig_height: 1);
+		$image_width=$width*$orig_width/$orig_height;
+	}
+	else {
+		$scale = ($orig_width ? $width/$orig_width : 1);
+		$image_width = $width;
+	}
+
+	my $height = $orig_height * $scale;
+
+	$image_width = floor($image_width);
+	$width       = floor($width);
+	$height      = floor($height);
+
+	return ($image_width, $width, $height, $original_size);
+}
+
 sub get_imageinfo {
 	my ($r, $file, $type, $width, $height) = @_;
 	my $imageinfo = {};
@@ -1013,7 +1137,7 @@ sub get_imageinfo {
 						}
 					} 
 					elsif (ref($element) eq 'HASH') {
-						$value .= "<br>{ ";
+						$value .= "<br />{ ";
 			    		foreach (sort keys %{$element}) {
 							$value .= "$_ = " . $element->{$_} . ' ';
 						}
@@ -1194,11 +1318,13 @@ sub readfile_getnum {
 
 	my $rotate = 0;
 
+	print STDERR "orientation: ".$imageinfo->{Orientation}."\n";
 	# Check to see if the image contains the Orientation EXIF key,
 	# but allow user to override using rotate
 	if (!defined($r->dir_config("GalleryAutoRotate")) 
 		|| $r->dir_config("GalleryAutoRotate") eq "1") {
 		if (defined($imageinfo->{Orientation})) {
+			print STDERR $imageinfo->{Orientation}."\n";
 			if ($imageinfo->{Orientation} eq 'right_top') {
 				$rotate=1;
 			}	
@@ -1775,6 +1901,16 @@ of directory names.
 
 =back
 
+=item B<GalleryCommentExifKey>
+
+Set this option to e.g. ImageDescription to use this field as comments
+for images.
+
+=item B<GalleryEnableMediaRss>
+
+Set this option to 1 to enable generation of a media RSS feed. This
+can be used e.g. together with the PicLens plugin from http://piclens.com
+
 =head1 FEATURES
 
 =over 4
@@ -1816,12 +1952,16 @@ following lines.
 Example:
 
 	TITLE: This is the new title of the page
-	And this is the comment.<br>
+	And this is the comment.<br />
 	And this is line two of the comment.
 
 The visible name of the folder is by default identical to the name of
 the folder, but can be changed by creating a file <directory>.folder
 with the visible name of the folder.
+
+It is also possible to set GalleryCommentExifKey to the name of an EXIF
+field containing the comment, e.g. ImageDescription. The EXIF comment is
+overridden by the .comment file if it exists.
 
 =back
 
