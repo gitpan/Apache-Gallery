@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Apache-Gallery
-version:            1.0
+version:            1.0.1
 abstract:           mod_perl handler to create an image gallery
 author:
     - Michael Legart <michael@legart.dk>
