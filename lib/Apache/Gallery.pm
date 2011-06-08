@@ -1,13 +1,13 @@
 package Apache::Gallery;
 
-# $Author: mil $ $Rev: 324 $
-# $Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $
+# $Author: mil $ $Rev: 335 $
+# $Date: 2011-06-08 20:47:46 +0200 (Wed, 08 Jun 2011) $
 
 use strict;
 
 use vars qw($VERSION);
 
-$VERSION = "1.0.1";
+$VERSION = "1.0.2";
 
 BEGIN {
 
@@ -75,7 +75,7 @@ sub handler {
 	}
 
 	$r->headers_out->{"X-Powered-By"} = "apachegallery.dk $VERSION - Hest design!";
-	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 324 $ $Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $';
+	$r->headers_out->{"X-Gallery-Version"} = '$Rev: 335 $ $Date: 2011-06-08 20:47:46 +0200 (Wed, 08 Jun 2011) $';
 
 	my $filename = $r->filename;
 	$filename =~ s/\/$//;
@@ -183,7 +183,7 @@ sub handler {
 
 	my $doc_pattern = $r->dir_config('GalleryDocFile');
 	unless ($doc_pattern) {
-		$doc_pattern = '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|html?|csv|eps)$'
+		$doc_pattern = '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|txt|html?|csv|eps)$'
 	}
 	my $img_pattern = $r->dir_config('GalleryImgFile');
 	unless ($img_pattern) {
@@ -351,7 +351,8 @@ sub handler {
 
 				my $fileurl = $uri."/".$file;
 
-				if (-d $thumbfilename) {
+				# Debian bug #619625 <http://bugs.debian.org/619625>
+				if (-d $thumbfilename && ! -e $thumbfilename . ".ignore") {
 					my $dirtitle = '';
 					if (-e $thumbfilename . ".folder") {
 						$dirtitle = get_filecontent($thumbfilename . ".folder");
@@ -367,7 +368,8 @@ sub handler {
 									   );
 
 				}
-				elsif (-f $thumbfilename && $thumbfilename =~ /$doc_pattern/i && $thumbfilename !~ /$img_pattern/i) {
+				# Debian bug #619625 <http://bugs.debian.org/619625>
+				elsif (-f $thumbfilename && $thumbfilename =~ /$doc_pattern/i && $thumbfilename !~ /$img_pattern/i && ! -e $thumbfilename . ".ignore") {
 					my $type = lc($1);
 					my $stat = stat($thumbfilename);
 					my $size = $stat->size;
@@ -385,17 +387,23 @@ sub handler {
 						$filetype = "unknown";
 					}
 
+					# Debian bug #348724 <http://bugs.debian.org/348724>
+					# not images
+					my $filetitle = $file;
+					$filetitle =~ s/_/ /g if $r->dir_config('GalleryUnderscoresToSpaces');
+
 					$tpl_vars{FILES} .=
 					     $templates{file}->fill_in(HASH => {%tpl_vars,
 										FILEURL => uri_escape($fileurl, $escape_rule),
 										ALT => "Size: $size Bytes",
-										FILE => $file,
+										FILE => $filetitle,
 										TYPE => $type,
 										FILETYPE => $filetype,
 									       }
 								      );
 				}
-				elsif (-f $thumbfilename) {
+				# Debian bug #619625 <http://bugs.debian.org/619625>
+				elsif (-f $thumbfilename && ! -e $thumbfilename . ".ignore") {
 
 					my ($width, $height, $type) = imgsize($thumbfilename);
 					next if $type eq 'Data stream is not a known image file format';
@@ -408,8 +416,14 @@ sub handler {
 					my $cached = get_scaled_picture_name($thumbfilename, $thumbnailwidth, $thumbnailheight);
 
 					my $rotate = readfile_getnum($r, $imageinfo, $thumbfilename.".rotate");
+
+					# Debian bug #348724 <http://bugs.debian.org/348724>
+					# HTML <img> tag, alt attribute
+					my $filetitle = $file;
+					$filetitle =~ s/_/ /g if $r->dir_config('GalleryUnderscoresToSpaces');
+
 					my %file_vars = (FILEURL => uri_escape($fileurl, $escape_rule),
-							 FILE    => $file,
+							 FILE    => $filetitle,
 							 DATE    => $imageinfo->{DateTimeOriginal} ? $imageinfo->{DateTimeOriginal} : '', # should this really be a stat of the file instead of ''?
 							 SRC     => uri_escape($uri."/.cache/$cached", $escape_rule),
 							 HEIGHT => (grep($rotate==$_, (1, 3)) ? $thumbnailwidth : $thumbnailheight),
@@ -453,7 +467,8 @@ sub handler {
 				return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
 			}
 	
-			my @neighbour_directories = grep { !/^\./ && -d "$parent_filename/$_" } readdir (PARENT_DIR);
+			# Debian bug #619625 <http://bugs.debian.org/619625>
+			my @neighbour_directories = grep { !/^\./ && -d "$parent_filename/$_" && ! -e "$parent_filename/$_" . ".ignore" } readdir (PARENT_DIR);
 			my $dirsortby;
 			if (defined($r->dir_config('GalleryDirSortBy'))) {
 				$dirsortby=$r->dir_config('GalleryDirSortBy');
@@ -488,7 +503,7 @@ sub handler {
 					}
 					if ($neightbour_counter < scalar @neighbour_directories - 1) {
 						my $linktext = $neighbour_directories[$neightbour_counter+1];
-						if (-e $parent_filename.'/'.$neighbour_directories[$neightbour_counter-1] . ".folder") {
+						if (-e $parent_filename.'/'.$neighbour_directories[$neightbour_counter+1] . ".folder") {
 							$linktext = get_filecontent($parent_filename.'/'.$neighbour_directories[$neightbour_counter+1] . ".folder");
 						}
 						my %info = (
@@ -605,7 +620,7 @@ sub handler {
 			show_error($r, 500, "Unable to access directory", "Unable to access directory $path");
 			return $::MP2 ? Apache2::Const::OK() : Apache::Constants::OK();
 		}
-		my @pictures = grep { /$img_pattern/i } readdir (DATADIR);
+		my @pictures = grep { /$img_pattern/i && ! -e "$path/$_" . ".ignore" } readdir (DATADIR);
 		closedir(DATADIR);
 		@pictures = gallerysort($r, @pictures);
 
@@ -841,7 +856,7 @@ sub cache_dir {
 
 	unless ($r->dir_config('GalleryCacheDir')) {
 
-		$cache_root = '/var/tmp/Apache-Gallery/';
+		$cache_root = '/var/cache/www/';
 		if ($r->server->is_virtual) {
 			$cache_root = File::Spec->catdir($cache_root, $r->server->server_hostname);
 		} else {
@@ -1648,7 +1663,7 @@ directories.
 The options are set in the httpd.conf/.htaccess file using the syntax:
 B<PerlSetVar OptionName 'value'>
 
-Example: B<PerlSetVar GalleryCacheDir '/var/tmp/Apache-Gallery/'>
+Example: B<PerlSetVar GalleryCacheDir '/var/cache/www/'>
 
 =over 4
 
@@ -1665,9 +1680,9 @@ to 0.
 =item B<GalleryCacheDir>
 
 Directory where Apache::Gallery should create its cache with scaled
-pictures. The default is /var/tmp/Apache-Gallery/ . Here, a directory
-for each virtualhost or location will be created automaticly. Make
-sure your webserver has write access to the CacheDir.
+pictures. The default is /var/cache/www/ . Here, a directory for each
+virtualhost or location will be created automatically. Make sure your
+webserver has write access to the CacheDir.
 
 =item B<GalleryTemplateDir>
 
@@ -1784,7 +1799,7 @@ If you set this option to 'variables' the items you configure in GalleryInfo
 will be available to your templates as $EXIF_<KEYNAME> (in all uppercase). 
 That means that with the default setting "Picture Taken => DateTimeOriginal, 
 Flash => Flash" you will have the variables $EXIF_DATETIMEORIGINAL and 
-$EXIF_FLASH avilable to your templates. You can place them
+$EXIF_FLASH available to your templates. You can place them
 anywhere you want.
 
 =item B<GalleryRootPath>
@@ -1814,7 +1829,7 @@ Pattern matching the files you want Apache::Gallery to view in the index
 as normal files. All other filetypes will still be served by Apache::Gallery
 but are not visible in the index.
 
-The default is '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|html?|csv|eps)$'
+The default is '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|txt|html?|csv|eps)$'
 
 =item B<GalleryTTFDir>
 
@@ -1897,9 +1912,12 @@ Quality at 50:
 =item B<GalleryUnderscoresToSpaces>
 
 Set this option to 1 to convert underscores to spaces in the listing
-of directory names.
+of directory and file names, as well as in the alt attribute for HTML
+<img> tags.
 
 =back
+
+=over 4
 
 =item B<GalleryCommentExifKey>
 
@@ -1911,6 +1929,8 @@ for images.
 Set this option to 1 to enable generation of a media RSS feed. This
 can be used e.g. together with the PicLens plugin from http://piclens.com
 
+=back
+
 =head1 FEATURES
 
 =over 4
@@ -1919,7 +1939,7 @@ can be used e.g. together with the PicLens plugin from http://piclens.com
 
 Some cameras, like the Canon G3, detects the orientation of a picture
 and adds this info to the EXIF header. Apache::Gallery detects this
-and automaticly rotates images with this info.
+and automatically rotates images with this info.
 
 If your camera does not support this, you can rotate the images 
 manually, This can also be used to override the rotate information
@@ -1927,7 +1947,7 @@ from a camera that supports that. You can also disable this behavior
 with the GalleryAutoRotate option.
 
 To use this functionality you have to create file with the name of the 
-picture you want rotated appened with ".rotate". The file should include 
+picture you want rotated appended with ".rotate". The file should include 
 a number where these numbers are supported:
 
 	"1", rotates clockwise by 90 degree
@@ -1937,6 +1957,11 @@ a number where these numbers are supported:
 So if we want to rotate "Picture1234.jpg" 90 degrees clockwise we would
 create a file in the same directory called "Picture1234.jpg.rotate" with
 the number 1 inside of it.
+
+=item B<Ignore directories/files>
+
+To ignore a directory or a file (of any kind, not only images) you
+create a <directory|file>.ignore file.
 
 =item B<Comments>
 
@@ -1997,7 +2022,7 @@ Michael Legart <michael@legart.dk>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2001-2005 Michael Legart <michael@legart.dk>
+Copyright (C) 2001-2011 Michael Legart <michael@legart.dk>
 
 Templates designed by Thomas Kjaer <tk@lnx.dk>
 

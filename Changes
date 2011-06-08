@@ -1,7 +1,24 @@
-$Author: mil $ $Rev: 324 $
-$Date: 2011-02-22 21:56:06 +0100 (Tue, 22 Feb 2011) $
+$Author: mil $ $Rev: 335 $
+$Date: 2011-06-08 20:47:46 +0200 (Wed, 08 Jun 2011) $
 
 Revision history for Perl extension Apache::Gallery.
+
+1.0.2 Wed Jun  8 20:47:16 CEST 2011
+
+	- Extended GalleryUnderscoresToSpaces to filenames as well.
+	  (Debian bug #348724, Francesco Potortì)
+	- Added txt to GalleryDocFile, the code in Gallery.pm already
+	  allowed it.  (Luca Capello)
+	- Added text-html.png and text-txt.png icons.
+	  (Debian bug #423004, Luca Capello)
+	- Fixed counter typo for <directory>.folder in next directory
+	  menu item.  (Luca Capello)
+	- Added support to ignore items through <directory|file>.ignore.
+ 	  (Debian bug #619625, Luca Capello)
+	- Fixed spelling typos in Gallery.pm and README.  (Luca Capello)
+	- GalleryCacheDir defaults to /var/cache/www/ per the FHS-2.3.
+	  (Debian bug #337197, Luca Capello)
+	- Fixed two minor POD errors (Michael Legart)
 
 1.0.1 Wed Feb 23 20:45:38 CET 2011
 

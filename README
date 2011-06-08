@@ -19,7 +19,7 @@ CONFIGURATION
     The options are set in the httpd.conf/.htaccess file using the syntax:
     PerlSetVar OptionName 'value'
 
-    Example: PerlSetVar GalleryCacheDir '/var/tmp/Apache-Gallery/'
+    Example: PerlSetVar GalleryCacheDir '/var/cache/www/'
 
     GalleryAutoRotate
         Some cameras, like the Canon G3, can detect the orientation of a the
@@ -32,10 +32,9 @@ CONFIGURATION
 
     GalleryCacheDir
         Directory where Apache::Gallery should create its cache with scaled
-        pictures. The default is /var/tmp/Apache-Gallery/ . Here, a
-        directory for each virtualhost or location will be created
-        automaticly. Make sure your webserver has write access to the
-        CacheDir.
+        pictures. The default is /var/cache/www/ . Here, a directory for
+        each virtualhost or location will be created automatically. Make
+        sure your webserver has write access to the CacheDir.
 
     GalleryTemplateDir
         Full path to the directory where you placed the templates. This
@@ -139,7 +138,7 @@ CONFIGURATION
         GalleryInfo will be available to your templates as $EXIF_<KEYNAME>
         (in all uppercase). That means that with the default setting
         "Picture Taken => DateTimeOriginal, Flash => Flash" you will have
-        the variables $EXIF_DATETIMEORIGINAL and $EXIF_FLASH avilable to
+        the variables $EXIF_DATETIMEORIGINAL and $EXIF_FLASH available to
         your templates. You can place them anywhere you want.
 
     GalleryRootPath
@@ -165,8 +164,8 @@ CONFIGURATION
         Apache::Gallery but are not visible in the index.
 
         The default is
-        '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|html?|csv|eps)
-        $'
+        '\.(mpe?g|avi|mov|asf|wmv|doc|mp3|ogg|pdf|rtf|wav|dlt|txt|html?|csv|
+        eps)$'
 
     GalleryTTFDir
         To use the GalleryCopyrightText feature you must set this option to
@@ -235,21 +234,23 @@ CONFIGURATION
 
     GalleryUnderscoresToSpaces
         Set this option to 1 to convert underscores to spaces in the listing
-        of directory names.
+        of directory and file names, as well as in the alt attribute for
+        HTML <img> tags.
 
     GalleryCommentExifKey
-    Set this option to e.g. ImageDescription to use this field as comments
-    for images.
+        Set this option to e.g. ImageDescription to use this field as
+        comments for images.
 
     GalleryEnableMediaRss
-    Set this option to 1 to enable generation of a media RSS feed. This can
-    be used e.g. together with the PicLens plugin from http://piclens.com
+        Set this option to 1 to enable generation of a media RSS feed. This
+        can be used e.g. together with the PicLens plugin from
+        http://piclens.com
 
 FEATURES
     Rotate images
         Some cameras, like the Canon G3, detects the orientation of a
         picture and adds this info to the EXIF header. Apache::Gallery
-        detects this and automaticly rotates images with this info.
+        detects this and automatically rotates images with this info.
 
         If your camera does not support this, you can rotate the images
         manually, This can also be used to override the rotate information
@@ -257,8 +258,8 @@ FEATURES
         with the GalleryAutoRotate option.
 
         To use this functionality you have to create file with the name of
-        the picture you want rotated appened with ".rotate". The file should
-        include a number where these numbers are supported:
+        the picture you want rotated appended with ".rotate". The file
+        should include a number where these numbers are supported:
 
                 "1", rotates clockwise by 90 degree
                 "2", rotates clockwise by 180 degrees
@@ -267,6 +268,10 @@ FEATURES
         So if we want to rotate "Picture1234.jpg" 90 degrees clockwise we
         would create a file in the same directory called
         "Picture1234.jpg.rotate" with the number 1 inside of it.
+
+    Ignore directories/files
+        To ignore a directory or a file (of any kind, not only images) you
+        create a <directory|file>.ignore file.
 
     Comments
         To include comments for a directory you create a <directory>.comment
@@ -307,7 +312,7 @@ AUTHOR
     Michael Legart <michael@legart.dk>
 
 COPYRIGHT AND LICENSE
-    Copyright (C) 2001-2005 Michael Legart <michael@legart.dk>
+    Copyright (C) 2001-2011 Michael Legart <michael@legart.dk>
 
     Templates designed by Thomas Kjaer <tk@lnx.dk>
 
